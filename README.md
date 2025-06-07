@@ -1,329 +1,299 @@
-# AI Trading Bot - README
+# 🤖 AI Trading Bot
 
-Aplikasi Bot Trading Otomatis Berbasis AI untuk cryptocurrency trading di platform Indodax.
+A sophisticated AI-powered cryptocurrency trading bot with real-time market analysis, automated trading strategies, risk management, and a beautiful web interface built with Streamlit.
 
-## 🚀 Fitur Utama
+![AI Trading Bot Dashboard](https://img.shields.io/badge/Status-Active-green) ![Python](https://img.shields.io/badge/Python-3.8%2B-blue) ![Streamlit](https://img.shields.io/badge/Streamlit-1.28%2B-red)
 
-### 🔍 Data Historis
-- ✅ Ambil harga dari Indodax via API
-- ✅ Penyimpanan data historis OHLCV
-- ✅ Real-time market data
+## ✨ Features
 
-### 📈 Analisis Teknikal
-- ✅ MACD (Moving Average Convergence Divergence)
-- ✅ RSI (Relative Strength Index)
-- ✅ Moving Average (SMA, EMA)
-- ✅ Bollinger Bands
-- ✅ Stochastic Oscillator
-- ✅ Volume indicators
+### 🎯 Core Trading Features
+- **Automated Trading**: AI-powered buy/sell decisions based on multiple indicators
+- **Real-time Market Data**: Live price feeds from Indodax exchange
+- **Technical Analysis**: RSI, MACD, Moving Averages, Bollinger Bands
+- **AI Predictions**: LSTM neural network for price forecasting
+- **Risk Management**: Stop-loss, take-profit, position sizing
+- **Backtesting**: Test strategies on historical data
 
-### 🤖 Prediksi Harga AI
-- ✅ LSTM Deep Learning model
-- ✅ Multi-feature prediction
-- ✅ Confidence scoring
-- ✅ Model training & evaluation
+### 📊 Dashboard Features
+- **Modern Web Interface**: Beautiful, responsive Streamlit dashboard
+- **Live Charts**: Real-time candlestick charts with technical indicators
+- **Portfolio Tracking**: Monitor assets, P&L, and performance
+- **Trading Signals**: Visual buy/sell/hold recommendations
+- **Market Analysis**: Comprehensive technical and AI analysis
+- **Trade History**: Complete log of all trading activities
 
-### 💸 Trading Otomatis
-- ✅ Beli/Jual via Indodax API
-- ✅ Signal-based trading
-- ✅ Manual trading control
+### 🔔 Communication Features
+- **Telegram Notifications**: Real-time trade alerts and reports
+- **WhatsApp Integration**: SMS and WhatsApp notifications via Twilio
+- **Email Alerts**: Important notifications via email
+- **Daily Reports**: Automated portfolio performance summaries
 
-### 📲 Notifikasi Real-time
-- ✅ WhatsApp (via Twilio)
-- ✅ Telegram Bot
-- ✅ Trading signals
-- ✅ Portfolio updates
+### 🛡️ Security & Risk Management
+- **API Security**: Encrypted API key storage
+- **Risk Controls**: Maximum daily trades, position limits
+- **Stop Loss/Take Profit**: Automatic risk management
+- **Portfolio Limits**: Maximum exposure controls
 
-### 📁 Logging Transaksi
-- ✅ CSV file logging
-- ✅ Trade history
-- ✅ Signal logging
-- ✅ Error tracking
+## 🚀 Quick Start
 
-### ⚙️ Risk Management
-- ✅ Stop Loss & Take Profit
-- ✅ Position sizing
-- ✅ Daily loss limits
-- ✅ Max trades per day
+### Prerequisites
+- Python 3.8 or higher
+- Linux/Ubuntu server (recommended)
+- Indodax API account
+- Telegram Bot (optional)
+- Twilio account (optional)
 
-### 📊 Backtesting
-- ✅ Strategy testing
-- ✅ Performance metrics
-- ✅ Multiple strategies
-- ✅ Risk analysis
+### 1. Installation
 
-### 🖥️ GUI Dashboard
-- ✅ Streamlit web interface
-- ✅ Real-time charts
-- ✅ Portfolio overview
-- ✅ Manual trading
-
-## 📦 Instalasi
-
-### 1. Clone Repository
 ```bash
-git clone <repository-url>
-cd ai-trading-bot
-```
+# Navigate to project directory
+cd /var/www/html/ai-trading-bot
 
-### 2. Install Dependencies
-```bash
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 3. Konfigurasi Environment
-Edit file `.env` dengan konfigurasi Anda:
+### 2. Configuration
 
-```env
-# Indodax API
-INDODAX_API_KEY=your_indodax_api_key
-INDODAX_SECRET_KEY=your_indodax_secret_key
+```bash
+# Copy environment template
+cp .env.example .env
 
-# Telegram
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-TELEGRAM_CHAT_ID=your_telegram_chat_id
+# Edit configuration file
+nano .env
+```
 
-# WhatsApp (Twilio)
-TWILIO_ACCOUNT_SID=your_twilio_account_sid
-TWILIO_AUTH_TOKEN=your_twilio_auth_token
-TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
-TWILIO_WHATSAPP_TO=whatsapp:+your_phone_number
+Fill in your API credentials and trading parameters in the `.env` file.
+
+### 3. Run the Dashboard
+
+```bash
+# Start the web dashboard
+./run_dashboard.sh
+```
+
+The dashboard will be available at `http://localhost:8501`
+
+## 📋 Configuration
+
+### Environment Variables
+
+#### Required Settings
+```bash
+# Indodax API (Required for trading)
+INDODAX_API_KEY=your_api_key_here
+INDODAX_SECRET_KEY=your_secret_key_here
 
 # Trading Parameters
-DEFAULT_TRADE_AMOUNT=100000
-MAX_DAILY_TRADES=10
 STOP_LOSS_PERCENT=5
-TAKE_PROFIT_PERCENT=10
+TAKE_PROFIT_PERCENT=15
+MAX_DAILY_TRADES=20
 ```
 
-## 🚀 Penggunaan
-
-### 1. Jalankan Dashboard Web
+#### Optional Notifications
 ```bash
-streamlit run dashboard.py
+# Telegram Bot
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_CHAT_ID=your_chat_id
+
+# Twilio (SMS/WhatsApp)
+TWILIO_ACCOUNT_SID=your_account_sid
+TWILIO_AUTH_TOKEN=your_auth_token
 ```
 
-### 2. Jalankan Bot via Command Line
+## 🖥️ Dashboard Overview
+
+### Pages Available:
+1. **📊 Dashboard**: Portfolio overview, performance metrics, live charts
+2. **🚀 Live Trading**: Real-time trading controls and monitoring
+3. **📈 Market Analysis**: Technical indicators and AI predictions
+4. **💼 Portfolio**: Asset allocation and performance tracking
+5. **🔬 Backtesting**: Strategy testing on historical data
+6. **⚙️ Settings**: Configuration and system controls
+7. **🔔 Notifications**: Alert management and communication
+8. **📋 Trading Log**: Complete trade history and analysis
+
+## 🤖 AI Features
+
+### Technical Analysis
+- **RSI (Relative Strength Index)**: Momentum oscillator
+- **MACD**: Moving Average Convergence Divergence
+- **Moving Averages**: SMA, EMA trend analysis
+- **Bollinger Bands**: Volatility and price level indicators
+- **Volume Analysis**: Trading volume patterns
+
+### AI Predictions
+- **LSTM Neural Network**: Deep learning price prediction
+- **Multi-timeframe Analysis**: 1m, 5m, 15m, 1h, 4h, 1d
+- **Sentiment Analysis**: Market sentiment indicators
+- **Pattern Recognition**: Chart pattern detection
+
+## 🔄 Trading Strategies
+
+### Available Strategies:
+1. **Scalping**: Quick profits on small price movements
+2. **Swing Trading**: Medium-term trend following
+3. **DCA (Dollar Cost Averaging)**: Regular investment strategy
+4. **Grid Trading**: Buy low, sell high in ranges
+5. **Arbitrage**: Price difference exploitation
+
+## 📊 Risk Management
+
+### Built-in Protections:
+- **Stop Loss**: Automatic loss limitation
+- **Take Profit**: Profit taking automation
+- **Position Sizing**: Risk-based trade sizing
+- **Daily Limits**: Maximum trades and losses per day
+- **Drawdown Protection**: Portfolio drawdown limits
+
+## 🔔 Notifications
+
+### Supported Channels:
+- **Telegram**: Instant messages and reports
+- **WhatsApp**: Via Twilio integration
+- **SMS**: Text message alerts
+- **Email**: Important notifications
+- **Dashboard**: Real-time web notifications
+
+## 📈 Performance Tracking
+
+### Metrics Available:
+- **Total Portfolio Value**: Real-time portfolio worth
+- **P&L (Profit & Loss)**: Detailed profit/loss tracking
+- **Win Rate**: Percentage of profitable trades
+- **Average Return**: Mean return per trade
+- **Sharpe Ratio**: Risk-adjusted returns
+- **Maximum Drawdown**: Largest portfolio decline
+
+## 🛠️ Technical Stack
+
+### Core Technologies:
+- **Python 3.8+**: Main programming language
+- **Streamlit**: Web dashboard framework
+- **TensorFlow/Keras**: AI/ML model development
+- **Pandas**: Data manipulation and analysis
+- **NumPy**: Numerical computing
+- **Plotly**: Interactive charts and visualization
+
+### APIs & Integrations:
+- **Indodax API**: Cryptocurrency exchange
+- **Yahoo Finance**: Market data backup
+- **Telegram Bot API**: Messaging
+- **Twilio API**: SMS/WhatsApp notifications
+
+## 🚀 Deployment
+
+### Production Deployment:
+
 ```bash
-python main.py
+# Copy systemd service file
+sudo cp ai-trading-bot.service /etc/systemd/system/
+
+# Enable and start service
+sudo systemctl enable ai-trading-bot
+sudo systemctl start ai-trading-bot
+
+# Check status
+sudo systemctl status ai-trading-bot
 ```
 
-### 3. Training Model AI
+### Docker Deployment (Optional):
+
+```bash
+# Build Docker image
+docker build -t ai-trading-bot .
+
+# Run container
+docker run -d -p 8501:8501 --env-file .env ai-trading-bot
+```
+
+## 📝 Usage Examples
+
+### Manual Trading:
 ```python
 from main import AITradingBot
 
+# Initialize bot
 bot = AITradingBot()
-bot.train_ai_model('btcidr', retrain=True)
+
+# Get market analysis
+analysis = bot.analyze_market('btcidr')
+
+# Manual trade execution
+bot.execute_trade('btcidr', 'buy', 0.001)
 ```
 
-### 4. Backtesting Strategy
-```python
-results = bot.run_backtest('btcidr', 'ma_cross', days=30)
-print(results['summary'])
+### Automated Trading:
+```bash
+# Run continuous trading
+python main.py --symbol btcidr --strategy scalping --auto
 ```
 
-## 📊 Dashboard Features
+## 🔧 Troubleshooting
 
-### 🏠 Dashboard
-- Portfolio overview
-- Performance metrics
-- Recent activity
-- Asset allocation
+### Common Issues:
 
-### 📈 Market Analysis
-- Technical indicators
-- AI predictions
-- Market data
-- Price charts
+1. **API Connection Error**:
+   - Check API credentials in `.env`
+   - Verify network connectivity
+   - Check API rate limits
 
-### 🎯 Trading Signals
-- Signal breakdown
-- Manual trading
-- Signal strength
-- Risk analysis
+2. **Dashboard Not Loading**:
+   - Ensure port 8501 is available
+   - Check Python dependencies
+   - Verify Streamlit installation
 
-### 💼 Portfolio
-- Holdings overview
-- Performance tracking
-- Trade history
-- P&L analysis
+3. **Trading Not Working**:
+   - Check account balance
+   - Verify trading permissions
+   - Check risk management settings
 
-### 🧪 Backtesting
-- Strategy testing
-- Performance metrics
-- Trade simulation
-- Risk analysis
+## 📊 Monitoring
 
-### ⚙️ Settings
-- API configuration
-- Trading parameters
-- Notifications
-- AI model settings
+### Log Files:
+- `logs/trades.csv`: All trading activities
+- `logs/portfolio.csv`: Portfolio snapshots
+- `logs/signals.csv`: Trading signals
+- `logs/errors.csv`: Error tracking
 
-## 🔧 Konfigurasi API
+### Dashboard Monitoring:
+- Real-time performance metrics
+- Live trading activity
+- System health indicators
+- API connectivity status
 
-### Indodax API
-1. Login ke akun Indodax
-2. Buat API key di pengaturan
-3. Masukkan API key dan secret ke `.env`
+## 🔒 Security
 
-### Telegram Bot
-1. Chat dengan @BotFather di Telegram
-2. Buat bot baru dengan `/newbot`
-3. Dapatkan token dan chat ID
-4. Masukkan ke `.env`
+### Best Practices:
+- Keep API keys secure in `.env`
+- Use read-only API keys when possible
+- Enable IP whitelisting on exchange
+- Monitor trading activity regularly
+- Set appropriate risk limits
 
-### WhatsApp (Twilio)
-1. Daftar akun Twilio
-2. Dapatkan Account SID dan Auth Token
-3. Setup WhatsApp sandbox
-4. Masukkan konfigurasi ke `.env`
+## 🤝 Contributing
 
-## 📊 Monitoring & Logging
-
-### Log Files
-- `logs/trades.csv` - Riwayat trading
-- `logs/signals.csv` - Sinyal trading
-- `logs/portfolio.csv` - Status portfolio
-- `logs/errors.csv` - Error log
-
-### Model Files
-- `models/best_lstm_model.h5` - Trained LSTM model
-- `models/scaler.pkl` - Data scaler
-
-## ⚠️ Risk Management
-
-### Built-in Risk Controls
-- Stop loss otomatis
-- Take profit targets
-- Position sizing
-- Daily loss limits
-- Maximum trades per day
-
-### Best Practices
-- Mulai dengan amount kecil
-- Test di paper trading dulu
-- Monitor performance secara berkala
-- Set risk tolerance yang sesuai
-
-## 📱 Notifikasi
-
-### Signal Notifications
-- Buy/Sell signals
-- AI confidence levels
-- Technical indicators
-- Risk warnings
-
-### Trade Notifications
-- Order execution
-- Fill confirmations
-- P&L updates
-- Portfolio changes
-
-### Alert Notifications
-- Error alerts
-- Risk limit warnings
-- System status
-- Daily reports
-
-## 🧪 Testing
-
-### Test Notifications
-```python
-import asyncio
-from main import AITradingBot
-
-bot = AITradingBot()
-results = asyncio.run(bot.test_notifications())
-print(results)
-```
-
-### Backtest Strategy
-```python
-results = bot.run_backtest(
-    pair='btcidr',
-    strategy='ma_cross',
-    days=30
-)
-```
-
-## 📈 Performance Metrics
-
-### Trading Metrics
-- Total return
-- Win rate
-- Maximum drawdown
-- Sharpe ratio
-- Average trade size
-
-### AI Model Metrics
-- Prediction accuracy
-- Direction accuracy
-- Confidence levels
-- Model validation loss
-
-## 🔄 Maintenance
-
-### Daily Tasks
-- Check bot status
-- Review trading performance
-- Monitor error logs
-- Verify notifications
-
-### Weekly Tasks
-- Retrain AI model
-- Analyze strategy performance
-- Update risk parameters
-- Backup data
-
-## 🆘 Troubleshooting
-
-### Common Issues
-
-1. **API Connection Failed**
-   - Periksa API key dan secret
-   - Pastikan koneksi internet stabil
-   - Cek status Indodax API
-
-2. **Model Training Error**
-   - Pastikan data historis mencukupi
-   - Check memory usage
-   - Verify TensorFlow installation
-
-3. **Notification Failed**
-   - Periksa token Telegram/Twilio
-   - Verify chat ID/phone number
-   - Test connection manually
-
-### Error Codes
-- `DATA_FETCH_ERROR` - Gagal ambil data market
-- `ANALYSIS_ERROR` - Error dalam analisis teknikal
-- `TRADE_ERROR` - Gagal eksekusi trade
-- `AI_TRAINING_ERROR` - Error training model
-
-## 📞 Support
-
-Untuk bantuan teknis atau pertanyaan:
-- Baca dokumentasi lengkap
-- Check error logs
-- Review configuration
-- Test components individually
-
-## ⚖️ Disclaimer
-
-**PERINGATAN**: Trading cryptocurrency memiliki risiko tinggi. Bot ini adalah tool bantuan dan tidak menjamin profit. Gunakan dengan risiko sendiri dan pastikan untuk:
-
-- Test dengan amount kecil dulu
-- Pahami cara kerja bot
-- Monitor performance secara berkala
-- Set risk management yang tepat
-- Jangan invest lebih dari yang sanggup hilang
-
-Pengembang tidak bertanggung jawab atas kerugian trading yang terjadi.
+Contributions are welcome! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
 
 ## 📄 License
 
-MIT License - Silakan gunakan dan modifikasi sesuai kebutuhan.
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## ⚠️ Disclaimer
+
+**IMPORTANT**: This trading bot is for educational and research purposes. Cryptocurrency trading involves substantial risk of loss. Never trade with money you cannot afford to lose. The authors are not responsible for any financial losses incurred through the use of this software.
+
+## 📞 Support
+
+For support, questions, or feature requests:
+- Create an issue on GitHub
+- Join our Telegram group
+- Email: support@example.com
 
 ---
 

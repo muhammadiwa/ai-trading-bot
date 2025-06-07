@@ -7,7 +7,9 @@ from datetime import datetime, timedelta
 import asyncio
 import os
 import time
+import json
 from pathlib import Path
+import threading
 
 # Import bot components
 from main import AITradingBot
@@ -16,39 +18,108 @@ from transaction_logger import TransactionLogger
 
 # Page configuration
 st.set_page_config(
-    page_title="AI Trading Bot Dashboard",
+    page_title="AI Trading Bot Dashboard 🤖",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
+# Initialize session state
+if 'bot' not in st.session_state:
+    st.session_state.bot = AITradingBot()
+    st.session_state.is_running = False
+    st.session_state.auto_trading = False
+
+# Custom CSS for modern UI
 st.markdown("""
 <style>
     .main-header {
-        font-size: 2.5rem;
+        font-size: 3rem;
         font-weight: bold;
         text-align: center;
-        color: #1f77b4;
-        margin-bottom: 2rem;
-    }
-    .metric-card {
         background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        padding: 1rem;
-        border-radius: 10px;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 2rem;
+        padding: 1rem 0;
+    }
+    
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.5rem;
+        border-radius: 15px;
         color: white;
         text-align: center;
         margin-bottom: 1rem;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        transition: transform 0.2s;
     }
-    .success-alert {
+    
+    .metric-card:hover {
+        transform: translateY(-2px);
+    }
+    
+    .status-online {
+        background: linear-gradient(135deg, #56ab2f 0%, #a8e6cf 100%);
+    }
+    
+    .status-offline {
+        background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%);
+    }
+    
+    .trade-signal-buy {
+        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-weight: bold;
+    }
+    
+    .trade-signal-sell {
+        background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-weight: bold;
+    }
+    
+    .trade-signal-hold {
+        background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+        color: #333;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-weight: bold;
+    }
+    
+    .sidebar .sidebar-content {
+        background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+    }
+    
+    .alert-success {
         background-color: #d4edda;
-        border-color: #c3e6cb;
-        color: #155724;
-        padding: 0.75rem 1.25rem;
-        margin-bottom: 1rem;
-        border: 1px solid transparent;
-        border-radius: 0.25rem;
+        border-left: 4px solid #28a745;
+        padding: 1rem;
+        margin: 1rem 0;
+        border-radius: 5px;
     }
+    
+    .alert-warning {
+        background-color: #fff3cd;
+        border-left: 4px solid #ffc107;
+        padding: 1rem;
+        margin: 1rem 0;
+        border-radius: 5px;
+    }
+    
+    .alert-danger {
+        background-color: #f8d7da;
+        border-left: 4px solid #dc3545;
+        padding: 1rem;
+        margin: 1rem 0;
+        border-radius: 5px;
+    }
+</style>
+""", unsafe_allow_html=True)
     .error-alert {
         background-color: #f8d7da;
         border-color: #f5c6cb;

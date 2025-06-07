@@ -81,41 +81,86 @@ class AITradingBot:
         try:
             print(f"Fetching historical data for {pair}...")
             
-            # Get recent trades (as proxy for historical data)
+            # Get recent trades (as proxy for historical data)  
             trades = self.api.get_trades(pair)
             
-            if not trades:
+            if not trades or len(trades) == 0:
                 print(f"No trade data available for {pair}")
                 return pd.DataFrame()
             
-            # Convert to DataFrame
-            df = pd.DataFrame(trades)
+            # Handle different response formats
+            if isinstance(trades, dict) and 'return' in trades:
+                trades_data = trades['return']
+            elif isinstance(trades, list):
+                trades_data = trades
+            else:
+                print(f"Unexpected trade data format for {pair}")
+                return pd.DataFrame()
             
-            # Ensure we have required columns
-            if 'price' in df.columns:
-                df['close'] = pd.to_numeric(df['price'])
-            if 'date' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['date'], unit='s')
-            elif 'tid' in df.columns:
-                # Use trade ID as proxy for time ordering
-                df['timestamp'] = pd.to_datetime('now') - pd.to_timedelta(range(len(df)), unit='m')
+            if not trades_data:
+                print(f"Empty trade data for {pair}")
+                return pd.DataFrame()
             
-            # Add OHLCV data (simplified - using close price)
-            df['open'] = df['close']
-            df['high'] = df['close'] * 1.001  # Slight variation
-            df['low'] = df['close'] * 0.999
-            df['volume'] = pd.to_numeric(df.get('amount', 1))
+            # Convert to DataFrame with error handling
+            try:
+                df = pd.DataFrame(trades_data)
+            except Exception as df_error:
+                print(f"Error creating DataFrame: {df_error}")
+                return pd.DataFrame()
             
-            # Sort by timestamp
-            df = df.sort_values('timestamp').reset_index(drop=True)
+            if df.empty:
+                print(f"Empty DataFrame for {pair}")
+                return pd.DataFrame()
             
-            # Keep only required columns
-            required_columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-            available_columns = [col for col in required_columns if col in df.columns]
-            df = df[available_columns]
-            
-            print(f"Retrieved {len(df)} data points for {pair}")
-            return df.tail(limit)  # Return last N records
+            # Process the data with safe column handling
+            try:
+                # Ensure we have required columns with safe defaults
+                if 'price' in df.columns:
+                    df['close'] = pd.to_numeric(df['price'], errors='coerce')
+                else:
+                    df['close'] = 0
+                    
+                if 'date' in df.columns:
+                    df['timestamp'] = pd.to_datetime(df['date'], unit='s', errors='coerce')
+                elif 'tid' in df.columns:
+                    # Use trade ID as proxy for time ordering
+                    base_time = pd.to_datetime('now')
+                    df['timestamp'] = base_time - pd.to_timedelta(range(len(df), 0, -1), unit='m')
+                else:
+                    # Generate timestamps
+                    base_time = pd.to_datetime('now')
+                    df['timestamp'] = base_time - pd.to_timedelta(range(len(df), 0, -1), unit='m')
+                
+                # Add OHLCV data (simplified - using close price)
+                df['open'] = df['close']
+                df['high'] = df['close'] * 1.001  # Slight variation
+                df['low'] = df['close'] * 0.999
+                
+                if 'amount' in df.columns:
+                    df['volume'] = pd.to_numeric(df['amount'], errors='coerce').fillna(1)
+                else:
+                    df['volume'] = 1
+                
+                # Remove rows with invalid data
+                df = df.dropna(subset=['close', 'timestamp'])
+                
+                if df.empty:
+                    print(f"No valid data after processing for {pair}")
+                    return pd.DataFrame()
+                
+                # Sort by timestamp
+                df = df.sort_values('timestamp').reset_index(drop=True)
+                
+                # Keep only required columns
+                required_columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+                df = df[required_columns]
+                
+                print(f"Retrieved {len(df)} data points for {pair}")
+                return df.tail(limit)  # Return last N records
+                
+            except Exception as process_error:
+                print(f"Error processing data for {pair}: {process_error}")
+                return pd.DataFrame()
             
         except Exception as e:
             print(f"Error fetching historical data for {pair}: {e}")
