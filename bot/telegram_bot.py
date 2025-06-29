@@ -17,7 +17,7 @@ import structlog
 
 from config.settings import settings
 from core.database import get_db, User, Trade, Portfolio, AISignal, UserSettings
-from core.indodax_api import indodax_api
+from core.indodax_api import IndodaxAPI
 from ai.signal_generator import SignalGenerator
 from bot.keyboards import create_main_keyboard, create_trading_keyboard, create_settings_keyboard
 from bot.messages import Messages
@@ -106,6 +106,9 @@ class TelegramBot:
         self.router.message(SettingsStates.editing_stop_loss)(self.process_stop_loss)
         self.router.message(SettingsStates.editing_take_profit)(self.process_take_profit)
         self.router.message(SettingsStates.editing_max_trade_amount)(self.process_max_trade_amount)
+        
+        # Amount selection callback handlers
+        self.router.callback_query(F.data.startswith("amount_"))(self.callback_amount_selection)
         
     async def start(self):
         """Start the Telegram bot"""
@@ -275,8 +278,10 @@ class TelegramBot:
             api_key = decrypt_api_key(user.indodax_api_key)
             secret_key = decrypt_api_key(user.indodax_secret_key)
             
-            user_api = indodax_api.__class__(api_key, secret_key)
+            user_api = IndodaxAPI(api_key, secret_key)
             balance_data = await user_api.get_balance()
+            
+            logger.info("Balance data received", balance_data=balance_data, data_type=type(balance_data))
             
             balance_text = self.messages.format_balance(balance_data, user.language)
             await message.answer(balance_text)
@@ -377,7 +382,7 @@ class TelegramBot:
             api_key = decrypt_api_key(user.indodax_api_key)
             secret_key = decrypt_api_key(user.indodax_secret_key)
             
-            user_api = indodax_api.__class__(api_key, secret_key)
+            user_api = IndodaxAPI(api_key, secret_key)
             orders_data = await user_api.get_open_orders()
             
             orders_text = self.messages.format_orders(orders_data, user.language)
@@ -501,7 +506,7 @@ class TelegramBot:
             await message.answer("🔄 Memvalidasi API credentials...")
             
             # Test API credentials
-            test_api = indodax_api.__class__(api_key, secret_key)
+            test_api = IndodaxAPI(api_key, secret_key)
             try:
                 # Call a simple API to test credentials
                 result = await test_api.get_info()
@@ -547,10 +552,16 @@ class TelegramBot:
             
             if action == "buy" or action == "sell":
                 pair_id = data_parts[2] if len(data_parts) > 2 else "btc_idr"
+                user = await self._get_or_create_user(callback.from_user)
                 
-                await callback.message.answer(f"💰 Masukkan jumlah IDR untuk {action} {pair_id.upper()}:")
-                await state.set_state(TradingStates.entering_amount)
-                await state.update_data(trade_type=action, pair_id=pair_id)
+                if action == "buy":
+                    # Show amount selection with balance and percentage options
+                    await self._show_buy_amount_selection(callback.message, user, pair_id, state)
+                else:
+                    # For sell, show different options
+                    await callback.message.answer(f"💰 Masukkan jumlah {pair_id.split('_')[0].upper()} untuk jual:")
+                    await state.set_state(TradingStates.entering_amount)
+                    await state.update_data(trade_type=action, pair_id=pair_id)
             
             await callback.answer()
             
@@ -705,13 +716,18 @@ class TelegramBot:
             
             # Try to parse amount
             try:
-                amount = float(amount_text.replace(",", "").replace(".", ""))
+                amount = float(amount_text.replace(",", ""))
             except ValueError:
                 await message.answer("❌ Jumlah tidak valid. Masukkan angka yang benar.")
                 return
             
             if amount <= 0:
                 await message.answer("❌ Jumlah harus lebih besar dari 0.")
+                return
+            
+            # Check minimum order requirement for Indodax (10,000 IDR)
+            if amount < 10000:
+                await message.answer("❌ Minimum order di Indodax adalah 10,000 IDR. Silakan masukkan jumlah yang lebih besar.")
                 return
             
             # Get state data
@@ -880,7 +896,7 @@ Lanjutkan trading?
             secret_key = decrypt_api_key(user.indodax_secret_key)
             
             # Create user-specific API client
-            user_api = indodax_api(api_key, secret_key)
+            user_api = IndodaxAPI(api_key, secret_key)
             
             # Get account info and balance
             account_info = await user_api.get_info()
@@ -938,33 +954,92 @@ Lanjutkan trading?
             secret_key = decrypt_api_key(user.indodax_secret_key)
             
             # Create user-specific API client
-            user_api = indodax_api(api_key, secret_key)
+            user_api = IndodaxAPI(api_key, secret_key)
+            
+            # Ensure pair_id has correct format (e.g. btcidr, not btc)
+            if "_" in pair_id:
+                # Already in correct format like btc_idr
+                ticker_pair = pair_id.replace("_", "")  # btcidr for ticker API
+            else:
+                # Assume it's just the symbol like "btc"
+                ticker_pair = f"{pair_id}idr"
+                pair_id = f"{pair_id}_idr"  # For trade API
             
             # Get current ticker to determine price
-            ticker = await user_api.get_ticker(pair_id)
+            ticker = await user_api.get_ticker(ticker_pair)
             
             if trade_type == "buy":
-                # For buy orders, use ask price and calculate quantity
-                price = float(ticker["ticker"]["buy"])
-                quantity = amount / price
+                # For buy orders, amount is in IDR, calculate quantity
+                if "ticker" in ticker:
+                    price = float(ticker["ticker"]["sell"])  # Use sell price for buying
+                else:
+                    price = float(ticker.get("last", ticker.get("sell", 0)))
                 
-                # Place buy order
+                if price <= 0:
+                    await message.answer("❌ Tidak dapat mendapatkan harga saat ini.")
+                    return
+                
+                # Validate minimum order value (10,000 IDR)
+                if amount < 10000:
+                    await message.answer("❌ Minimum order di Indodax adalah 10,000 IDR.")
+                    return
+                
+                # Log the calculation for debugging
+                logger.info("Buy order calculation", 
+                           amount_idr=amount, 
+                           price=price, 
+                           pair=pair_id)
+                
+                # Place buy order using IDR amount (let Indodax calculate quantity)
                 result = await user_api.trade(
                     pair=pair_id,
                     type="buy",
                     price=price,
-                    idr=amount
+                    idr_amount=amount
                 )
-            else:  # sell
-                # For sell orders, amount is the quantity to sell
-                price = float(ticker["ticker"]["sell"])
                 
-                # Place sell order
+                # Calculate quantity for database storage
+                quantity = amount / price
+                
+            else:  # sell
+                # For sell orders, amount is also in IDR, calculate quantity to sell
+                if "ticker" in ticker:
+                    price = float(ticker["ticker"]["buy"])  # Use buy price for selling
+                else:
+                    price = float(ticker.get("last", ticker.get("buy", 0)))
+                
+                if price <= 0:
+                    await message.answer("❌ Tidak dapat mendapatkan harga saat ini.")
+                    return
+                
+                # Validate minimum order value (10,000 IDR)
+                if amount < 10000:
+                    await message.answer("❌ Minimum order di Indodax adalah 10,000 IDR.")
+                    return
+                
+                # Calculate quantity to sell based on IDR amount
+                quantity = amount / price
+                
+                # Double check: ensure calculated total meets minimum
+                calculated_total = quantity * price
+                if calculated_total < 10000:
+                    await message.answer(f"❌ Order terlalu kecil. Total nilai: {format_currency(calculated_total)} IDR. Minimum: 10,000 IDR.")
+                    return
+                
+                # Log the calculation for debugging
+                logger.info("Sell order calculation", 
+                           amount_idr=amount, 
+                           price=price, 
+                           quantity=quantity, 
+                           calculated_total=calculated_total,
+                           pair=pair_id)
+                
+                # Place sell order using coin amount
                 result = await user_api.trade(
                     pair=pair_id,
                     type="sell",
                     price=price,
-                    btc=amount  # This should be dynamic based on currency
+                    coin_amount=quantity
                 )
             
             if result.get("success") == 1:
@@ -976,9 +1051,9 @@ Lanjutkan trading?
                         pair_id=pair_id,
                         order_id=str(result["return"]["order_id"]),
                         type=trade_type,
-                        amount=amount,
+                        amount=quantity,  # Store quantity, not IDR amount
                         price=price,
-                        total=amount if trade_type == "buy" else amount * price,
+                        total=amount,  # Store IDR amount as total
                         status="pending",
                         created_at=datetime.utcnow()
                     )
@@ -993,12 +1068,19 @@ Lanjutkan trading?
 Order ID: {result["return"]["order_id"]}
 Type: {trade_type.upper()}
 Pair: {pair_id.upper()}
-{"Amount: " + format_currency(amount) + " IDR" if trade_type == "buy" else f"Quantity: {amount:.8f}"}
+Amount: {format_currency(amount)} IDR
+Quantity: {quantity:.8f}
 Price: {format_currency(price)} IDR
 
 Order akan dieksekusi sesuai kondisi pasar.
                 """
                 await message.answer(success_msg)
+                
+                # Start monitoring order status
+                asyncio.create_task(self._monitor_order_status(user.id, result["return"]["order_id"], pair_id))
+                
+                # Start monitoring order status
+                asyncio.create_task(self._monitor_order_status(user.id, result["return"]["order_id"], pair_id))
             else:
                 error_msg = result.get("error", "Unknown error occurred")
                 await message.answer(f"❌ Gagal membuat order: {error_msg}")
@@ -1062,6 +1144,224 @@ Order akan dieksekusi sesuai kondisi pasar.
             logger.error("Failed to broadcast message", error=str(e))
             return 0, 0
     
+    async def _monitor_order_status(self, user_id: int, order_id: str, pair_id: str):
+        """Monitor order status and notify user when executed"""
+        try:
+            # Get user
+            db = get_db()
+            try:
+                user = db.query(User).filter(User.id == user_id).first()
+                if not user or not user.indodax_api_key:
+                    return
+                
+                # Decrypt API credentials
+                api_key = decrypt_api_key(user.indodax_api_key)
+                secret_key = decrypt_api_key(user.indodax_secret_key)
+                user_api = IndodaxAPI(api_key, secret_key)
+                
+                # Check order status periodically
+                max_checks = 60  # Check for 1 hour (60 minutes)
+                check_count = 0
+                
+                while check_count < max_checks:
+                    try:
+                        # Get order history to check if executed
+                        order_history = await user_api.get_order_history(pair=pair_id, count=100)
+                        
+                        if "return" in order_history and "orders" in order_history["return"]:
+                            for order in order_history["return"]["orders"]:
+                                if str(order["order_id"]) == str(order_id):
+                                    if order["status"] == "filled":
+                                        # Order executed, send notification
+                                        await self._send_order_notification(user, order, pair_id)
+                                        
+                                        # Update database
+                                        trade = db.query(Trade).filter(Trade.order_id == str(order_id)).first()
+                                        if trade:
+                                            trade.status = "completed"
+                                            trade.updated_at = datetime.utcnow()
+                                            db.commit()
+                                        
+                                        return  # Stop monitoring
+                                    elif order["status"] == "cancelled":
+                                        # Order cancelled
+                                        await self._send_order_cancelled_notification(user, order, pair_id)
+                                        
+                                        # Update database
+                                        trade = db.query(Trade).filter(Trade.order_id == str(order_id)).first()
+                                        if trade:
+                                            trade.status = "cancelled"
+                                            trade.updated_at = datetime.utcnow()
+                                            db.commit()
+                                        
+                                        return  # Stop monitoring
+                        
+                        # Wait 1 minute before next check
+                        await asyncio.sleep(60)
+                        check_count += 1
+                        
+                    except Exception as e:
+                        logger.error("Error checking order status", order_id=order_id, error=str(e))
+                        await asyncio.sleep(60)
+                        check_count += 1
+                
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error("Failed to monitor order status", order_id=order_id, error=str(e))
+    
+    async def _send_order_notification(self, user, order, pair_id: str):
+        """Send notification when order is executed"""
+        try:
+            notification_text = f"""
+🎉 <b>Order Tereksekusi!</b>
+
+Order ID: {order['order_id']}
+Type: {order['type'].upper()}
+Pair: {pair_id.upper()}
+Amount: {order['order_amount']} {pair_id.split('_')[0].upper()}
+Price: {format_currency(float(order['price']))} IDR
+Total: {format_currency(float(order['remain_amount']) * float(order['price']))} IDR
+Status: ✅ COMPLETED
+
+⏰ Waktu: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}
+            """
+            
+            await self.bot.send_message(user.telegram_id, notification_text)
+            logger.info("Order notification sent", user_id=user.id, order_id=order['order_id'])
+            
+        except Exception as e:
+            logger.error("Failed to send order notification", user_id=user.id, error=str(e))
+    
+    async def _send_order_cancelled_notification(self, user, order, pair_id: str):
+        """Send notification when order is cancelled"""
+        try:
+            notification_text = f"""
+❌ <b>Order Dibatalkan</b>
+
+Order ID: {order['order_id']}
+Type: {order['type'].upper()}
+Pair: {pair_id.upper()}
+Amount: {order['order_amount']} {pair_id.split('_')[0].upper()}
+Price: {format_currency(float(order['price']))} IDR
+Status: ❌ CANCELLED
+
+⏰ Waktu: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}
+            """
+            
+            await self.bot.send_message(user.telegram_id, notification_text)
+            logger.info("Order cancellation notification sent", user_id=user.id, order_id=order['order_id'])
+            
+        except Exception as e:
+            logger.error("Failed to send order cancellation notification", user_id=user.id, error=str(e))
+
+    async def callback_amount_selection(self, callback: CallbackQuery, state: FSMContext):
+        """Handle amount selection callbacks"""
+        try:
+            data_parts = callback.data.split("_")
+            if len(data_parts) < 3:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
+            action = data_parts[1]  # percentage or custom
+            percentage = data_parts[2] if len(data_parts) > 2 else "0"
+            
+            # Get state data
+            data = await state.get_data()
+            trade_type = data.get('trade_type', 'buy')
+            pair_id = data.get('pair_id', 'btc_idr')
+            idr_balance = data.get('idr_balance', 0)
+            
+            if action == "percentage":
+                # Calculate amount based on percentage
+                percentage_value = float(percentage)
+                amount = (idr_balance * percentage_value) / 100
+                
+                # Validate minimum order
+                if amount < 10000:
+                    await callback.answer("❌ Jumlah terlalu kecil (min. 10,000 IDR).")
+                    return
+                
+                # Update state with calculated amount
+                await state.update_data(amount=amount)
+                
+                # Show confirmation
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text="✅ Ya", callback_data="confirm_yes"),
+                        InlineKeyboardButton(text="❌ Tidak", callback_data="confirm_no")
+                    ]
+                ])
+                
+                confirm_text = f"""
+🔄 **Konfirmasi Trading**
+
+Action: {trade_type.upper()}
+Pair: {pair_id.upper()}
+Amount: {format_currency(amount)} IDR ({percentage}% dari saldo)
+Saldo IDR: {format_currency(idr_balance)} IDR
+
+Lanjutkan trading?
+"""
+                
+                await callback.message.edit_text(confirm_text, reply_markup=keyboard)
+                
+            elif action == "custom":
+                # Ask for custom amount input
+                await callback.message.edit_text(f"💰 Masukkan jumlah IDR untuk {trade_type} {pair_id.upper()}: (Min. 10,000 IDR)")
+                await state.set_state(TradingStates.entering_amount)
+            
+            await callback.answer()
+            
+        except Exception as e:
+            logger.error("Failed to handle amount selection callback", error=str(e))
+            await callback.answer("❌ Terjadi kesalahan.")
+    
+    async def _show_buy_amount_selection(self, message, user, pair_id: str, state: FSMContext):
+        """Show buy amount selection with balance and percentage options"""
+        try:
+            # Get user's IDR balance
+            api_key = decrypt_api_key(user.indodax_api_key)
+            secret_key = decrypt_api_key(user.indodax_secret_key)
+            user_api = IndodaxAPI(api_key, secret_key)
+            
+            balance_data = await user_api.get_balance()
+            idr_balance = float(balance_data.get('idr', 0))
+            
+            # Update state with balance info
+            await state.update_data(trade_type="buy", pair_id=pair_id, idr_balance=idr_balance)
+            
+            # Create keyboard with percentage options
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text=f"25% ({format_currency(idr_balance * 0.25)} IDR)", callback_data="amount_percentage_25"),
+                    InlineKeyboardButton(text=f"50% ({format_currency(idr_balance * 0.5)} IDR)", callback_data="amount_percentage_50")
+                ],
+                [
+                    InlineKeyboardButton(text=f"75% ({format_currency(idr_balance * 0.75)} IDR)", callback_data="amount_percentage_75"),
+                    InlineKeyboardButton(text=f"100% ({format_currency(idr_balance)} IDR)", callback_data="amount_percentage_100")
+                ],
+                [
+                    InlineKeyboardButton(text="💰 Custom Amount", callback_data="amount_custom_0")
+                ]
+            ])
+            
+            selection_text = f"""
+💰 **Pilih Jumlah untuk Buy {pair_id.upper()}**
+
+💵 Saldo IDR Tersedia: {format_currency(idr_balance)} IDR
+📊 Minimum Order: 10,000 IDR
+
+Pilih persentase dari saldo atau masukkan jumlah custom:
+"""
+            
+            await message.answer(selection_text, reply_markup=keyboard)
+            
+        except Exception as e:
+            logger.error("Failed to show buy amount selection", error=str(e))
+            await message.answer("❌ Terjadi kesalahan saat mengambil data saldo.")
+
     # Main Menu Callback Handlers
     
     async def callback_portfolio(self, callback: CallbackQuery):
@@ -1100,7 +1400,7 @@ Order akan dieksekusi sesuai kondisi pasar.
             api_key = decrypt_api_key(user.indodax_api_key)
             secret_key = decrypt_api_key(user.indodax_secret_key)
             
-            user_api = indodax_api.__class__(api_key, secret_key)
+            user_api = IndodaxAPI(api_key, secret_key)
             balance_data = await user_api.get_balance()
             
             balance_text = self.messages.format_balance(balance_data, user.language)
@@ -1172,7 +1472,7 @@ Order akan dieksekusi sesuai kondisi pasar.
             api_key = decrypt_api_key(user.indodax_api_key)
             secret_key = decrypt_api_key(user.indodax_secret_key)
             
-            user_api = indodax_api.__class__(api_key, secret_key)
+            user_api = IndodaxAPI(api_key, secret_key)
             orders_data = await user_api.get_open_orders()
             
             orders_text = self.messages.format_orders(orders_data, user.language)

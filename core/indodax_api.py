@@ -214,14 +214,35 @@ class IndodaxAPI:
         info = await self.get_info()
         return info.get("return", {}).get("balance", {})
     
-    async def trade(self, pair: str, type: str, price: float, amount: float) -> Dict[str, Any]:
-        """Execute a trade order"""
+    async def trade(self, pair: str, type: str, price: float = None, idr_amount: float = None, coin_amount: float = None) -> Dict[str, Any]:
+        """Execute a trade order
+        
+        Args:
+            pair: Trading pair (e.g., 'btc_idr')
+            type: 'buy' or 'sell'
+            price: Order price (required for limit orders)
+            idr_amount: Amount in IDR (for buy orders)
+            coin_amount: Amount in cryptocurrency (for sell orders or buy with coin amount)
+        """
         params = {
             "pair": pair,
-            "type": type,  # buy or sell
-            "price": str(price),
-            "amount": str(amount)
+            "type": type
         }
+        
+        # Add price if provided
+        if price is not None:
+            params["price"] = str(price)
+        
+        # For buy orders with IDR amount
+        if type == "buy" and idr_amount is not None:
+            params["idr"] = str(int(idr_amount))  # IDR should be integer
+        
+        # For sell orders or buy orders with coin amount
+        elif coin_amount is not None:
+            # Extract base currency from pair (btc_idr -> btc)
+            base_currency = pair.split("_")[0]
+            params[base_currency] = str(coin_amount)
+        
         return await self._private_request("trade", params)
     
     async def cancel_order(self, order_id: str, pair: str, type: str) -> Dict[str, Any]:

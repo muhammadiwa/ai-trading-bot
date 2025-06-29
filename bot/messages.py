@@ -4,6 +4,10 @@ Message templates for the Telegram bot in multiple languages
 from datetime import datetime
 from typing import Dict, Any, List
 from core.database import AISignal, Trade
+from bot.utils import format_currency
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 class Messages:
     """Message templates for the bot in multiple languages"""
@@ -337,16 +341,27 @@ Pilih aksi trading Anda:
         else:
             text = "💰 <b>Saldo Akun</b>\n\n"
         
-        if "return" in balance_data and "balance" in balance_data["return"]:
-            balances = balance_data["return"]["balance"]
+        # Check if balance_data is directly the balance dict
+        if isinstance(balance_data, dict):
+            has_balance = False
             
-            for currency, balance in balances.items():
-                balance_float = float(balance)
-                if balance_float > 0:
-                    if currency.lower() == "idr":
-                        text += f"💵 {currency.upper()}: {format_currency(balance_float)}\n"
-                    else:
-                        text += f"🪙 {currency.upper()}: {balance_float:.8f}\n"
+            for currency, balance in balance_data.items():
+                try:
+                    balance_float = float(balance)
+                    if balance_float > 0:
+                        has_balance = True
+                        if currency.lower() == "idr":
+                            text += f"💵 {currency.upper()}: {format_currency(balance_float)}\n"
+                        else:
+                            text += f"🪙 {currency.upper()}: {balance_float:.8f}\n"
+                except (ValueError, TypeError):
+                    continue
+            
+            if not has_balance:
+                if language == "en":
+                    text += "📭 No balance available or all balances are zero."
+                else:
+                    text += "📭 Tidak ada saldo tersedia atau semua saldo kosong."
         else:
             if language == "en":
                 text += "📭 No balance data available."
@@ -365,29 +380,60 @@ Pilih aksi trading Anda:
         else:
             text = "📋 <b>Order Terbuka Anda</b>\n\n"
         
-        if "return" in orders_data and "orders" in orders_data["return"]:
-            orders = orders_data["return"]["orders"]
-            
-            if orders:
-                for order in orders:
-                    order_type = order.get("type", "")
-                    pair = order.get("pair", "")
-                    price = float(order.get("price", 0))
-                    remain_btc = float(order.get("remain_btc", 0))
+        try:
+            # Check if we have orders data
+            if "return" in orders_data and "orders" in orders_data["return"]:
+                orders = orders_data["return"]["orders"]
+                
+                # orders is a dict with pair_id as key and list of orders as value
+                if isinstance(orders, dict) and orders:
+                    order_count = 0
+                    for pair_id, pair_orders in orders.items():
+                        if isinstance(pair_orders, list):
+                            for order in pair_orders:
+                                order_type = order.get("type", "")
+                                price = float(order.get("price", 0))
+                                order_id = order.get("order_id", "")
+                                
+                                # Get remaining amount based on order type
+                                if order_type == "buy":
+                                    remain_amount = float(order.get("remain_idr", 0))
+                                    amount_text = f"{format_currency(remain_amount)} IDR"
+                                else:  # sell
+                                    # Try different field names for remaining amount
+                                    remain_amount = 0
+                                    for field in ["remain_btc", "remain_eth", f"remain_{pair_id.split('_')[0]}"]:
+                                        if field in order:
+                                            remain_amount = float(order.get(field, 0))
+                                            break
+                                    amount_text = f"{remain_amount:.8f} {pair_id.split('_')[0].upper()}"
+                                
+                                text += f"📌 #{order_id} - {order_type.upper()} {pair_id.upper()}\n"
+                                text += f"   💰 Price: {format_currency(price)} IDR\n"
+                                text += f"   📊 Amount: {amount_text}\n\n"
+                                order_count += 1
                     
-                    text += f"📌 {order_type.upper()} {pair.upper()}\n"
-                    text += f"   💰 Price: {format_currency(price)} IDR\n"
-                    text += f"   📊 Amount: {remain_btc:.8f}\n\n"
+                    if order_count == 0:
+                        if language == "en":
+                            text += "📭 No open orders."
+                        else:
+                            text += "📭 Tidak ada order terbuka."
+                else:
+                    if language == "en":
+                        text += "📭 No open orders."
+                    else:
+                        text += "📭 Tidak ada order terbuka."
             else:
                 if language == "en":
-                    text += "📭 No open orders."
+                    text += "📭 No orders data available."
                 else:
-                    text += "📭 Tidak ada order terbuka."
-        else:
+                    text += "📭 Data order tidak tersedia."
+        except Exception as e:
+            logger.error("Error formatting orders", error=str(e))
             if language == "en":
-                text += "📭 No orders data available."
+                text += "❌ Error formatting orders data."
             else:
-                text += "📭 Data order tidak tersedia."
+                text += "❌ Error memformat data order."
         
         return text
     
