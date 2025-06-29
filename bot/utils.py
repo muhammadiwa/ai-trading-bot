@@ -48,6 +48,19 @@ def validate_amount(amount_str: str) -> Optional[float]:
     except (ValueError, TypeError):
         return None
 
+def round_coin_amount(amount: float) -> float:
+    """Round coin amount to 8 decimal places for Indodax API compliance"""
+    return round(amount, 8)
+
+def validate_coin_amount(amount: float) -> bool:
+    """Validate if coin amount has valid precision (8 decimal places or less)"""
+    # Convert to string and check decimal places
+    amount_str = str(amount)
+    if '.' in amount_str:
+        decimal_places = len(amount_str.split('.')[1])
+        return decimal_places <= 8
+    return True
+
 def validate_api_key(api_key: str) -> bool:
     """Basic validation for API key format"""
     if not api_key or len(api_key) < 20:

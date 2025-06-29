@@ -241,7 +241,9 @@ class IndodaxAPI:
         elif coin_amount is not None:
             # Extract base currency from pair (btc_idr -> btc)
             base_currency = pair.split("_")[0]
-            params[base_currency] = str(coin_amount)
+            # Round coin amount to 8 decimal places to prevent API errors
+            rounded_coin_amount = round(coin_amount, 8)
+            params[base_currency] = str(rounded_coin_amount)
         
         return await self._private_request("trade", params)
     

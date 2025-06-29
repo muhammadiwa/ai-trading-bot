@@ -21,7 +21,7 @@ from core.indodax_api import IndodaxAPI
 from ai.signal_generator import SignalGenerator
 from bot.keyboards import create_main_keyboard, create_trading_keyboard, create_settings_keyboard
 from bot.messages import Messages
-from bot.utils import format_currency, is_admin_user, encrypt_api_key, decrypt_api_key
+from bot.utils import format_currency, is_admin_user, encrypt_api_key, decrypt_api_key, round_coin_amount, validate_coin_amount
 
 logger = structlog.get_logger(__name__)
 
@@ -558,10 +558,8 @@ class TelegramBot:
                     # Show amount selection with balance and percentage options
                     await self._show_buy_amount_selection(callback.message, user, pair_id, state)
                 else:
-                    # For sell, show different options
-                    await callback.message.answer(f"💰 Masukkan jumlah {pair_id.split('_')[0].upper()} untuk jual:")
-                    await state.set_state(TradingStates.entering_amount)
-                    await state.update_data(trade_type=action, pair_id=pair_id)
+                    # For sell, show sell amount selection with coin balance and percentage options
+                    await self._show_sell_amount_selection(callback.message, user, pair_id, state)
             
             await callback.answer()
             
@@ -725,15 +723,38 @@ class TelegramBot:
                 await message.answer("❌ Jumlah harus lebih besar dari 0.")
                 return
             
-            # Check minimum order requirement for Indodax (10,000 IDR)
-            if amount < 10000:
-                await message.answer("❌ Minimum order di Indodax adalah 10,000 IDR. Silakan masukkan jumlah yang lebih besar.")
-                return
-            
             # Get state data
             data = await state.get_data()
             trade_type = data.get('trade_type')
             pair_id = data.get('pair_id', 'btc_idr')
+            
+            # Validate amount based on trade type
+            if trade_type == "buy":
+                # For buy, amount is in IDR
+                if amount < 10000:
+                    await message.answer("❌ Minimum order di Indodax adalah 10,000 IDR. Silakan masukkan jumlah yang lebih besar.")
+                    return
+                
+                # Check if user has enough IDR balance
+                idr_balance = data.get('idr_balance', 0)
+                if amount > idr_balance:
+                    await message.answer(f"❌ Saldo IDR tidak mencukupi. Saldo Anda: {format_currency(idr_balance)} IDR")
+                    return
+            
+            elif trade_type == "sell":
+                # For sell, amount is in coin quantity
+                coin_balance = data.get('coin_balance', 0)
+                
+                # Validate and round amount to 8 decimal places for Indodax API
+                if not validate_coin_amount(amount):
+                    await message.answer("❌ Jumlah coin memiliki terlalu banyak digit desimal. Maksimal 8 digit desimal.")
+                    return
+                    
+                amount = round_coin_amount(amount)
+                if amount > coin_balance:
+                    base_coin = pair_id.split('_')[0].upper()
+                    await message.answer(f"❌ Saldo {base_coin} tidak mencukupi. Saldo Anda: {coin_balance:.8f} {base_coin}")
+                    return
             
             # Update state with amount
             await state.update_data(amount=amount)
@@ -746,12 +767,25 @@ class TelegramBot:
                 ]
             ])
             
-            confirm_text = f"""
+            # Different confirmation message based on trade type
+            if trade_type == "buy":
+                confirm_text = f"""
 🔄 **Konfirmasi Trading**
 
 Action: {trade_type.upper()}
 Pair: {pair_id.upper()}
 Amount: {format_currency(amount)} IDR
+
+Lanjutkan trading?
+"""
+            else:  # sell
+                base_coin = pair_id.split('_')[0].upper()
+                confirm_text = f"""
+🔄 **Konfirmasi Trading**
+
+Action: {trade_type.upper()}
+Pair: {pair_id.upper()}
+Amount: {amount:.8f} {base_coin}
 
 Lanjutkan trading?
 """
@@ -1002,7 +1036,7 @@ Lanjutkan trading?
                 quantity = amount / price
                 
             else:  # sell
-                # For sell orders, amount is also in IDR, calculate quantity to sell
+                # For sell orders, amount is the coin quantity to sell
                 if "ticker" in ticker:
                     price = float(ticker["ticker"]["buy"])  # Use buy price for selling
                 else:
@@ -1012,29 +1046,24 @@ Lanjutkan trading?
                     await message.answer("❌ Tidak dapat mendapatkan harga saat ini.")
                     return
                 
+                # For sell, amount is coin quantity, calculate total IDR value
+                quantity = round_coin_amount(amount)  # Round to 8 decimal places for Indodax API
+                total_idr_value = quantity * price
+                
                 # Validate minimum order value (10,000 IDR)
-                if amount < 10000:
-                    await message.answer("❌ Minimum order di Indodax adalah 10,000 IDR.")
-                    return
-                
-                # Calculate quantity to sell based on IDR amount
-                quantity = amount / price
-                
-                # Double check: ensure calculated total meets minimum
-                calculated_total = quantity * price
-                if calculated_total < 10000:
-                    await message.answer(f"❌ Order terlalu kecil. Total nilai: {format_currency(calculated_total)} IDR. Minimum: 10,000 IDR.")
+                if total_idr_value < 10000:
+                    await message.answer(f"❌ Order terlalu kecil. Total nilai: {format_currency(total_idr_value)} IDR. Minimum: 10,000 IDR.")
                     return
                 
                 # Log the calculation for debugging
                 logger.info("Sell order calculation", 
-                           amount_idr=amount, 
+                           coin_amount=amount, 
                            price=price, 
                            quantity=quantity, 
-                           calculated_total=calculated_total,
+                           total_idr_value=total_idr_value,
                            pair=pair_id)
                 
-                # Place sell order using coin amount
+                # Place sell order using coin amount (rounded to 8 decimals)
                 result = await user_api.trade(
                     pair=pair_id,
                     type="sell",
@@ -1046,23 +1075,40 @@ Lanjutkan trading?
                 # Save trade to database
                 db = get_db()
                 try:
-                    trade = Trade(
-                        user_id=user.id,
-                        pair_id=pair_id,
-                        order_id=str(result["return"]["order_id"]),
-                        type=trade_type,
-                        amount=quantity,  # Store quantity, not IDR amount
-                        price=price,
-                        total=amount,  # Store IDR amount as total
-                        status="pending",
-                        created_at=datetime.utcnow()
-                    )
+                    if trade_type == "buy":
+                        # For buy: amount is IDR, quantity is calculated
+                        trade = Trade(
+                            user_id=user.id,
+                            pair_id=pair_id,
+                            order_id=str(result["return"]["order_id"]),
+                            type=trade_type,
+                            amount=quantity,  # Store quantity
+                            price=price,
+                            total=amount,  # Store IDR amount as total
+                            status="pending",
+                            created_at=datetime.utcnow()
+                        )
+                    else:  # sell
+                        # For sell: amount is coin quantity, calculate total IDR
+                        trade = Trade(
+                            user_id=user.id,
+                            pair_id=pair_id,
+                            order_id=str(result["return"]["order_id"]),
+                            type=trade_type,
+                            amount=quantity,  # Store coin quantity
+                            price=price,
+                            total=total_idr_value,  # Store calculated IDR total
+                            status="pending",
+                            created_at=datetime.utcnow()
+                        )
+                    
                     db.add(trade)
                     db.commit()
                 finally:
                     db.close()
                 
-                success_msg = f"""
+                if trade_type == "buy":
+                    success_msg = f"""
 ✅ <b>Order berhasil dibuat!</b>
 
 Order ID: {result["return"]["order_id"]}
@@ -1073,7 +1119,21 @@ Quantity: {quantity:.8f}
 Price: {format_currency(price)} IDR
 
 Order akan dieksekusi sesuai kondisi pasar.
-                """
+                    """
+                else:  # sell
+                    success_msg = f"""
+✅ <b>Order berhasil dibuat!</b>
+
+Order ID: {result["return"]["order_id"]}
+Type: {trade_type.upper()}
+Pair: {pair_id.upper()}
+Quantity: {quantity:.8f} {pair_id.split('_')[0].upper()}
+Price: {format_currency(price)} IDR
+Total: {format_currency(total_idr_value)} IDR
+
+Order akan dieksekusi sesuai kondisi pasar.
+                    """
+                
                 await message.answer(success_msg)
                 
                 # Start monitoring order status
@@ -1263,38 +1323,27 @@ Status: ❌ CANCELLED
             if len(data_parts) < 3:
                 await callback.answer("❌ Data tidak valid.")
                 return
-                
             action = data_parts[1]  # percentage or custom
             percentage = data_parts[2] if len(data_parts) > 2 else "0"
-            
-            # Get state data
             data = await state.get_data()
             trade_type = data.get('trade_type', 'buy')
             pair_id = data.get('pair_id', 'btc_idr')
-            idr_balance = data.get('idr_balance', 0)
-            
-            if action == "percentage":
-                # Calculate amount based on percentage
-                percentage_value = float(percentage)
-                amount = (idr_balance * percentage_value) / 100
-                
-                # Validate minimum order
-                if amount < 10000:
-                    await callback.answer("❌ Jumlah terlalu kecil (min. 10,000 IDR).")
-                    return
-                
-                # Update state with calculated amount
-                await state.update_data(amount=amount)
-                
-                # Show confirmation
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [
-                        InlineKeyboardButton(text="✅ Ya", callback_data="confirm_yes"),
-                        InlineKeyboardButton(text="❌ Tidak", callback_data="confirm_no")
-                    ]
-                ])
-                
-                confirm_text = f"""
+            if trade_type == "buy":
+                idr_balance = data.get('idr_balance', 0)
+                if action == "percentage":
+                    percentage_value = float(percentage)
+                    amount = (idr_balance * percentage_value) / 100
+                    if amount < 10000:
+                        await callback.answer("❌ Jumlah terlalu kecil (min. 10,000 IDR).")
+                        return
+                    await state.update_data(amount=amount)
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(text="✅ Ya", callback_data="confirm_yes"),
+                            InlineKeyboardButton(text="❌ Tidak", callback_data="confirm_no")
+                        ]
+                    ])
+                    confirm_text = f"""
 🔄 **Konfirmasi Trading**
 
 Action: {trade_type.upper()}
@@ -1304,20 +1353,51 @@ Saldo IDR: {format_currency(idr_balance)} IDR
 
 Lanjutkan trading?
 """
-                
-                await callback.message.edit_text(confirm_text, reply_markup=keyboard)
-                
-            elif action == "custom":
-                # Ask for custom amount input
-                await callback.message.edit_text(f"💰 Masukkan jumlah IDR untuk {trade_type} {pair_id.upper()}: (Min. 10,000 IDR)")
-                await state.set_state(TradingStates.entering_amount)
-            
+                    await callback.message.edit_text(confirm_text, reply_markup=keyboard)
+                elif action == "custom":
+                    await callback.message.edit_text(f"💰 Masukkan jumlah IDR untuk {trade_type} {pair_id.upper()}: (Min. 10,000 IDR)")
+                    await state.set_state(TradingStates.entering_amount)
+            elif trade_type == "sell":
+                coin_balance = data.get('coin_balance', 0)
+                base_coin = pair_id.split('_')[0].upper()
+                if action == "percentage":
+                    percentage_value = float(percentage)
+                    coin_amount = round_coin_amount(coin_balance * percentage_value / 100)  # Round to 8 decimals
+                    if coin_amount <= 0:
+                        await callback.answer("❌ Jumlah terlalu kecil.")
+                        return
+                    
+                    # Validate coin amount precision
+                    if not validate_coin_amount(coin_amount):
+                        await callback.answer("❌ Jumlah memiliki terlalu banyak digit desimal.")
+                        return
+                        
+                    await state.update_data(amount=coin_amount)
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(text="✅ Ya", callback_data="confirm_yes"),
+                            InlineKeyboardButton(text="❌ Tidak", callback_data="confirm_no")
+                        ]
+                    ])
+                    confirm_text = f"""
+🔄 **Konfirmasi Trading**
+
+Action: {trade_type.upper()}
+Pair: {pair_id.upper()}
+Amount: {coin_amount:.8f} {base_coin} ({percentage}% dari saldo)
+Saldo {base_coin}: {coin_balance:.8f} {base_coin}
+
+Lanjutkan trading?
+"""
+                    await callback.message.edit_text(confirm_text, reply_markup=keyboard)
+                elif action == "custom":
+                    await callback.message.edit_text(f"💰 Masukkan jumlah {base_coin} untuk {trade_type} {pair_id.upper()}:")
+                    await state.set_state(TradingStates.entering_amount)
             await callback.answer()
-            
         except Exception as e:
             logger.error("Failed to handle amount selection callback", error=str(e))
             await callback.answer("❌ Terjadi kesalahan.")
-    
+
     async def _show_buy_amount_selection(self, message, user, pair_id: str, state: FSMContext):
         """Show buy amount selection with balance and percentage options"""
         try:
@@ -1361,6 +1441,48 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
         except Exception as e:
             logger.error("Failed to show buy amount selection", error=str(e))
             await message.answer("❌ Terjadi kesalahan saat mengambil data saldo.")
+
+    async def _show_sell_amount_selection(self, message, user, pair_id: str, state: FSMContext):
+        """Show sell amount selection with coin balance and percentage options"""
+        try:
+            # Get user's coin balance
+            api_key = decrypt_api_key(user.indodax_api_key)
+            secret_key = decrypt_api_key(user.indodax_secret_key)
+            user_api = IndodaxAPI(api_key, secret_key)
+            
+            balance_data = await user_api.get_balance()
+            base_coin = pair_id.split('_')[0].lower()
+            coin_balance = float(balance_data.get(base_coin, 0))
+            
+            await state.update_data(trade_type="sell", pair_id=pair_id, coin_balance=coin_balance)
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text=f"25% ({coin_balance * 0.25:.8f} {base_coin.upper()})", callback_data="amount_percentage_25"),
+                    InlineKeyboardButton(text=f"50% ({coin_balance * 0.5:.8f} {base_coin.upper()})", callback_data="amount_percentage_50")
+                ],
+                [
+                    InlineKeyboardButton(text=f"75% ({coin_balance * 0.75:.8f} {base_coin.upper()})", callback_data="amount_percentage_75"),
+                    InlineKeyboardButton(text=f"100% ({coin_balance:.8f} {base_coin.upper()})", callback_data="amount_percentage_100")
+                ],
+                [
+                    InlineKeyboardButton(text="💰 Custom Amount", callback_data="amount_custom_0")
+                ]
+            ])
+            
+            selection_text = f"""
+💰 **Pilih Jumlah untuk Sell {base_coin.upper()}**
+
+🪙 Saldo {base_coin.upper()} Tersedia: {coin_balance:.8f} {base_coin.upper()}
+📊 Minimum Order: 10,000 IDR (berdasarkan nilai jual)
+
+Pilih persentase dari saldo atau masukkan jumlah custom:
+"""
+            
+            await message.answer(selection_text, reply_markup=keyboard)
+        except Exception as e:
+            logger.error("Failed to show sell amount selection", error=str(e))
+            await message.answer("❌ Terjadi kesalahan saat mengambil saldo koin.")
 
     # Main Menu Callback Handlers
     
