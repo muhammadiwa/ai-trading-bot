@@ -148,11 +148,17 @@ class IndodaxAPI:
         params["timestamp"] = self._get_timestamp()
         params["recvWindow"] = 5000
         
-        # Create query string for signature (without the signature itself)
-        query_string = "&".join([f"{k}={v}" for k, v in sorted(params.items())])
+        # Create request body for signature - must be sorted and URL encoded
+        # According to Indodax docs: method=getInfo&timestamp=1578304294000&recvWindow=1578303937000
+        body_params = []
+        for key in sorted(params.keys()):
+            body_params.append(f"{key}={params[key]}")
+        request_body = "&".join(body_params)
         
-        # Generate signature
-        signature = self._generate_signature(query_string)
+        logger.info("Creating signature", request_body=request_body)
+        
+        # Generate signature from request body
+        signature = self._generate_signature(request_body)
         
         # Prepare headers
         headers = {
@@ -161,19 +167,32 @@ class IndodaxAPI:
             "Content-Type": "application/x-www-form-urlencoded"
         }
         
+        logger.info("Making API request", method=method, url=self.tapi_url, headers_keys=list(headers.keys()))
+        
         try:
             # Use proper async request handling
             import aiohttp
             async with aiohttp.ClientSession() as session:
-                async with session.post(self.tapi_url, data=params, headers=headers) as response:
-                    response.raise_for_status()
-                    result = await response.json()
+                # Send as form data, not JSON
+                async with session.post(self.tapi_url, data=request_body, headers=headers) as response:
+                    response_text = await response.text()
+                    logger.info("API response received", status=response.status, response_preview=response_text[:200])
+                    
+                    if response.status != 200:
+                        logger.error("HTTP error", status=response.status, response=response_text)
+                        raise Exception(f"HTTP {response.status}: {response_text}")
+                    
+                    try:
+                        result = json.loads(response_text)
+                    except json.JSONDecodeError as e:
+                        logger.error("Failed to parse JSON response", response=response_text, error=str(e))
+                        raise Exception(f"Invalid JSON response: {response_text}")
                     
                     # Check for API errors
                     if result.get("success") == 0:
                         error_msg = result.get("error", "Unknown API error")
                         error_code = result.get("error_code", "unknown")
-                        logger.error("Indodax API error", method=method, error=error_msg, error_code=error_code)
+                        logger.error("Indodax API error", method=method, error=error_msg, error_code=error_code, full_response=result)
                         raise Exception(f"Indodax API Error [{error_code}]: {error_msg}")
                     
                     logger.info("API request successful", method=method)
