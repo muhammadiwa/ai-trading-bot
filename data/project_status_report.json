@@ -1,0 +1,246 @@
+{
+  "timestamp": "2025-06-28T22:10:43.641372",
+  "project_structure": {
+    "score": 84.62,
+    "missing_directories": [
+      "data/logs",
+      "data/backups",
+      "data/models",
+      "data/cache"
+    ],
+    "missing_files": [],
+    "total_items": 26,
+    "found_items": 22
+  },
+  "code_completeness": {
+    "score": 88.1,
+    "modules": {
+      "main.py": {
+        "score": 100.0,
+        "found": [
+          "main",
+          "asyncio",
+          "logging"
+        ],
+        "missing": [],
+        "file_size": 2725,
+        "line_count": 87
+      },
+      "config/settings.py": {
+        "score": 100.0,
+        "found": [
+          "Settings",
+          "validate_settings"
+        ],
+        "missing": [],
+        "file_size": 3475,
+        "line_count": 89
+      },
+      "core/database.py": {
+        "score": 100.0,
+        "found": [
+          "User",
+          "Trade",
+          "Portfolio",
+          "AISignal"
+        ],
+        "missing": [],
+        "file_size": 5750,
+        "line_count": 167
+      },
+      "core/indodax_api.py": {
+        "score": 66.67,
+        "found": [
+          "IndodaxAPI",
+          "get_ticker"
+        ],
+        "missing": [
+          "place_order"
+        ],
+        "file_size": 8484,
+        "line_count": 232
+      },
+      "core/scheduler.py": {
+        "score": 100.0,
+        "found": [
+          "init_scheduler",
+          "schedule"
+        ],
+        "missing": [],
+        "file_size": 9493,
+        "line_count": 255
+      },
+      "core/risk_manager.py": {
+        "score": 50.0,
+        "found": [
+          "RiskManager"
+        ],
+        "missing": [
+          "calculate_position_size"
+        ],
+        "file_size": 14238,
+        "line_count": 346
+      },
+      "core/portfolio_manager.py": {
+        "score": 50.0,
+        "found": [
+          "PortfolioManager"
+        ],
+        "missing": [
+          "calculate_pnl"
+        ],
+        "file_size": 19230,
+        "line_count": 451
+      },
+      "ai/signal_generator.py": {
+        "score": 100.0,
+        "found": [
+          "SignalGenerator",
+          "generate_signal"
+        ],
+        "missing": [],
+        "file_size": 16762,
+        "line_count": 410
+      },
+      "ai/sentiment_analyzer.py": {
+        "score": 100.0,
+        "found": [
+          "SentimentAnalyzer",
+          "analyze_sentiment"
+        ],
+        "missing": [],
+        "file_size": 15254,
+        "line_count": 371
+      },
+      "bot/telegram_bot.py": {
+        "score": 66.67,
+        "found": [
+          "TelegramBot",
+          "start"
+        ],
+        "missing": [
+          "handle_message"
+        ],
+        "file_size": 27111,
+        "line_count": 659
+      },
+      "bot/keyboards.py": {
+        "score": 100.0,
+        "found": [
+          "create_main_keyboard",
+          "create_trading_keyboard"
+        ],
+        "missing": [],
+        "file_size": 9774,
+        "line_count": 262
+      },
+      "bot/messages.py": {
+        "score": 100.0,
+        "found": [
+          "Messages",
+          "get_message"
+        ],
+        "missing": [],
+        "file_size": 15460,
+        "line_count": 446
+      },
+      "bot/utils.py": {
+        "score": 100.0,
+        "found": [
+          "format_currency",
+          "encrypt_api_key"
+        ],
+        "missing": [],
+        "file_size": 8670,
+        "line_count": 292
+      },
+      "web/dashboard.py": {
+        "score": 100.0,
+        "found": [
+          "FastAPI",
+          "health_check",
+          "get_stats"
+        ],
+        "missing": [],
+        "file_size": 7715,
+        "line_count": 248
+      }
+    },
+    "total_modules": 14
+  },
+  "configuration": {
+    "score": 100.0,
+    "env_example_exists": true,
+    "settings_complete": true,
+    "validation_script": true,
+    "migration_script": true
+  },
+  "dependencies": {
+    "score": 100.0,
+    "requirements_exists": true,
+    "requirements_dev_exists": true,
+    "critical_deps_present": true
+  },
+  "documentation": {
+    "score": 100.0,
+    "documents": {
+      "README.md": {
+        "exists": true,
+        "size": 10727,
+        "adequate": true
+      },
+      "DEVELOPMENT.md": {
+        "exists": true,
+        "size": 7835,
+        "adequate": true
+      },
+      "CHANGELOG.md": {
+        "exists": true,
+        "size": 4851,
+        "adequate": true
+      },
+      "indodax_trading_bot_blueprint.md": {
+        "exists": true,
+        "size": 4216,
+        "adequate": true
+      }
+    }
+  },
+  "deployment": {
+    "score": 100.0,
+    "files": {
+      "Dockerfile": {
+        "exists": true,
+        "executable": null
+      },
+      "docker-compose.yml": {
+        "exists": true,
+        "executable": null
+      },
+      "trading-bot.service": {
+        "exists": true,
+        "executable": null
+      },
+      "run.sh": {
+        "exists": true,
+        "executable": true
+      },
+      "install.sh": {
+        "exists": true,
+        "executable": true
+      },
+      "complete_setup.sh": {
+        "exists": true,
+        "executable": true
+      }
+    }
+  },
+  "testing": {
+    "score": 100.0,
+    "test_directory": true,
+    "conftest_exists": true,
+    "test_files_count": 1,
+    "utility_scripts": true
+  },
+  "overall_score": 96.1
+}
