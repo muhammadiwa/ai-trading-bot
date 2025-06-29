@@ -12,7 +12,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 import structlog
 
-from core.indodax_api import indodax_api
+from core.indodax_api import IndodaxAPI
 from core.database import get_db, AISignal, PriceHistory
 
 logger = structlog.get_logger(__name__)
@@ -24,6 +24,7 @@ class SignalGenerator:
         self.model_path = "ai/models/"
         self.scaler = StandardScaler()
         self.models = {}
+        self.api = IndodaxAPI()  # Add API instance
         self._load_models()
     
     def _load_models(self):
@@ -48,9 +49,10 @@ class SignalGenerator:
             # Get historical data
             historical_data = await self._get_historical_data(pair_id)
             
-            if historical_data is None or len(historical_data) < 50:
+            if historical_data is None or len(historical_data) < 20:
                 logger.warning("Insufficient data for signal generation", pair_id=pair_id)
-                return None
+                # Generate simple signal based on current market data
+                return await self._generate_simple_signal(pair_id)
             
             # Calculate technical indicators
             indicators = self._calculate_technical_indicators(historical_data)
@@ -122,7 +124,7 @@ class SignalGenerator:
             end_time = int(datetime.now().timestamp())
             start_time = end_time - (7 * 24 * 60 * 60)  # 7 days ago
             
-            ohlc_data = await indodax_api.get_ohlc_history(
+            ohlc_data = await self.api.get_ohlc_history(
                 pair_id.upper(), start_time, end_time, "15"
             )
             
@@ -331,6 +333,94 @@ class SignalGenerator:
             logger.error("Failed to generate technical signal", pair_id=pair_id, error=str(e))
             return None
     
+    async def _generate_simple_signal(self, pair_id: str) -> Optional[AISignal]:
+        """Generate simple signal based on current market data when historical data is insufficient"""
+        try:
+            # Convert pair_id format for ticker API (btc_idr -> btcidr)
+            ticker_pair = pair_id.replace("_", "") if "_" in pair_id else f"{pair_id}idr"
+            
+            # Get current ticker data
+            ticker = await self.api.get_ticker(ticker_pair)
+            if not ticker or "ticker" not in ticker:
+                logger.warning("No ticker data available", pair_id=pair_id, ticker_pair=ticker_pair)
+                return None
+            
+            ticker_data = ticker["ticker"]
+            current_price = float(ticker_data.get("last", 0))
+            high_24h = float(ticker_data.get("high", 0))
+            low_24h = float(ticker_data.get("low", 0))
+            volume = float(ticker_data.get("vol_idr", 0))
+            
+            if current_price == 0:
+                logger.warning("Current price is zero", pair_id=pair_id)
+                return None
+            
+            # Simple analysis based on 24h price position
+            price_position = (current_price - low_24h) / (high_24h - low_24h) if high_24h > low_24h else 0.5
+            
+            # Calculate price change percentage
+            if high_24h > low_24h:
+                volatility = ((high_24h - low_24h) / low_24h) * 100
+            else:
+                volatility = 0
+            
+            # Generate signal based on price position and volatility
+            if price_position < 0.3 and volatility > 2:  # Near 24h low with decent volatility
+                signal_type = "buy"
+                confidence = 0.65
+                signal_strength = "medium"
+                reasons = f"Price near 24h low ({price_position:.1%} of range), good entry opportunity"
+            elif price_position > 0.7 and volatility > 2:  # Near 24h high with decent volatility
+                signal_type = "sell" 
+                confidence = 0.65
+                signal_strength = "medium"
+                reasons = f"Price near 24h high ({price_position:.1%} of range), consider taking profit"
+            else:  # Middle range or low volatility
+                signal_type = "hold"
+                confidence = 0.5
+                signal_strength = "weak"
+                reasons = f"Price in middle range ({price_position:.1%}), wait for clearer signal"
+            
+            # Calculate stop loss and take profit
+            if signal_type == "buy":
+                stop_loss = current_price * 0.97  # 3% below
+                take_profit = current_price * 1.05  # 5% above
+            elif signal_type == "sell":
+                stop_loss = current_price * 1.03  # 3% above
+                take_profit = current_price * 0.95  # 5% below
+            else:  # hold
+                stop_loss = current_price * 0.95
+                take_profit = current_price * 1.05
+            
+            # Create signal
+            signal = AISignal(
+                pair_id=pair_id,
+                signal_type=signal_type,
+                confidence=confidence,
+                price_prediction=take_profit,
+                indicators={
+                    "current_price": current_price,
+                    "high_24h": high_24h,
+                    "low_24h": low_24h,
+                    "volume": volume,
+                    "price_position": price_position,
+                    "volatility": volatility,
+                    "entry_price": current_price,
+                    "stop_loss": stop_loss,
+                    "take_profit": take_profit,
+                    "signal_strength": signal_strength,
+                    "reasons": reasons
+                },
+                created_at=datetime.now(),
+                expires_at=datetime.now() + timedelta(hours=1)
+            )
+            
+            return signal
+            
+        except Exception as e:
+            logger.error("Failed to generate simple signal", pair_id=pair_id, error=str(e))
+            return None
+
     def _prepare_features(self, indicators: Dict[str, Any]) -> Optional[List[float]]:
         """Prepare features for ML model"""
         try:

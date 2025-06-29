@@ -4,6 +4,10 @@ Message templates for the Telegram bot in multiple languages
 from datetime import datetime
 from typing import Dict, Any, List
 from core.database import AISignal, Trade
+from bot.utils import format_currency
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 class Messages:
     """Message templates for the bot in multiple languages"""
@@ -101,6 +105,19 @@ Kelola preferensi trading dan pengaturan akun Anda:
 • 🔄 Auto Trading: Trading otomatis dengan AI
 • 🔔 Notifikasi: Pengaturan alert
 • 🌐 Bahasa: Ubah bahasa interface
+                """,
+                
+                "trading_menu": """
+💹 <b>Menu Trading</b>
+
+Pilih aksi trading Anda:
+
+• 🟢 <b>Beli</b> - Beli cryptocurrency
+• 🔴 <b>Jual</b> - Jual kepemilikan Anda
+• 📊 <b>Pasar</b> - Lihat data pasar
+• 📈 <b>Chart</b> - Analisis teknikal
+
+<i>Selalu trading dengan bijak dan jangan investasi lebih dari yang mampu Anda tanggung.</i>
                 """
             },
             
@@ -195,6 +212,19 @@ Manage your trading preferences and account settings:
 • 🔄 Auto Trading: Automatic trading with AI
 • 🔔 Notifications: Alert settings
 • 🌐 Language: Change interface language
+                """,
+                
+                "trading_menu": """
+💹 <b>Trading Menu</b>
+
+Choose your trading action:
+
+• 🟢 <b>Buy</b> - Purchase cryptocurrency
+• 🔴 <b>Sell</b> - Sell your holdings
+• 📊 <b>Market</b> - View market data
+• 📈 <b>Charts</b> - Technical analysis
+
+<i>Always trade responsibly and never invest more than you can afford to lose.</i>
                 """
             }
         }
@@ -236,161 +266,215 @@ Manage your trading preferences and account settings:
         """Get settings menu message"""
         return self.get_message("settings_menu", language)
     
+    def get_trading_menu_message(self, language: str = "id") -> str:
+        """Get trading menu message"""
+        if language == "en":
+            return """
+💹 <b>Trading Menu</b>
+
+Choose your trading action:
+
+• 🟢 <b>Buy</b> - Purchase cryptocurrency
+• 🔴 <b>Sell</b> - Sell your holdings
+• 📊 <b>Market</b> - View market data
+• 📈 <b>Charts</b> - Technical analysis
+
+<i>Always trade responsibly and never invest more than you can afford to lose.</i>
+            """
+        else:
+            return """
+💹 <b>Menu Trading</b>
+
+Pilih aksi trading Anda:
+
+• 🟢 <b>Beli</b> - Beli cryptocurrency
+• 🔴 <b>Jual</b> - Jual kepemilikan Anda
+• 📊 <b>Pasar</b> - Lihat data pasar
+• 📈 <b>Chart</b> - Analisis teknikal
+
+<i>Selalu trading dengan bijak dan jangan investasi lebih dari yang mampu Anda tanggung.</i>
+            """
+    
     def format_portfolio(self, portfolio_data: Dict[str, Any], language: str = "id") -> str:
         """Format portfolio data for display"""
-        if not portfolio_data:
-            return "❌ Tidak dapat mengambil data portfolio / Cannot retrieve portfolio data"
+        if "error" in portfolio_data:
+            return f"❌ Error: {portfolio_data['error']}"
         
         if language == "en":
-            title = "💼 <b>Your Portfolio</b>\n\n"
-            total_text = "💰 <b>Total Balance:</b>"
-            balance_text = "<b>Asset Balances:</b>"
+            text = "💼 <b>Your Portfolio</b>\n\n"
         else:
-            title = "💼 <b>Portfolio Anda</b>\n\n"
-            total_text = "💰 <b>Total Saldo:</b>"
-            balance_text = "<b>Saldo Aset:</b>"
+            text = "💼 <b>Portfolio Anda</b>\n\n"
         
-        message = title
+        if portfolio_data.get("assets"):
+            total_value = portfolio_data.get("total_idr_value", 0)
+            text += f"💰 Total Value: {format_currency(total_value)} IDR\n\n"
+            
+            for asset in portfolio_data["assets"]:
+                currency = asset["currency"]
+                balance = asset["balance"]
+                idr_value = asset["idr_value"]
+                
+                if currency == "IDR":
+                    text += f"💵 {currency}: {format_currency(balance)}\n"
+                else:
+                    current_price = asset.get("current_price", 0)
+                    text += f"🪙 {currency}: {balance:.8f}\n"
+                    text += f"   💰 Value: {format_currency(idr_value)} IDR\n"
+                    if current_price > 0:
+                        text += f"   📊 Price: {format_currency(current_price)} IDR\n"
+                text += "\n"
+        else:
+            if language == "en":
+                text += "📭 No assets found in your portfolio."
+            else:
+                text += "📭 Tidak ada aset ditemukan di portfolio Anda."
         
-        # Calculate total value in IDR
-        balance = portfolio_data.get('balance', {})
-        total_idr = 0
-        
-        # Add IDR balance
-        idr_balance = float(balance.get('idr', 0))
-        total_idr += idr_balance
-        
-        # Asset details
-        message += f"{balance_text}\n"
-        message += f"💵 IDR: {self._format_idr(idr_balance)}\n"
-        
-        # Add other crypto balances
-        for currency, amount in balance.items():
-            if currency != 'idr' and float(amount) > 0:
-                message += f"₿ {currency.upper()}: {float(amount):.8f}\n"
-        
-        message += f"\n{total_text} {self._format_idr(total_idr)}"
-        
-        return message
+        return text
     
     def format_balance(self, balance_data: Dict[str, Any], language: str = "id") -> str:
         """Format balance data for display"""
-        if not balance_data:
-            return "❌ Tidak dapat mengambil data saldo / Cannot retrieve balance data"
+        if "error" in balance_data:
+            return f"❌ Error: {balance_data['error']}"
         
         if language == "en":
-            title = "💰 <b>Account Balance</b>\n\n"
-            available_text = "Available"
-            locked_text = "Locked"
+            text = "💰 <b>Account Balance</b>\n\n"
         else:
-            title = "💰 <b>Saldo Akun</b>\n\n"
-            available_text = "Tersedia"
-            locked_text = "Terkunci"
+            text = "💰 <b>Saldo Akun</b>\n\n"
         
-        message = title
-        
-        # Main balances
-        for currency, amount in balance_data.items():
-            if float(amount) > 0:
-                if currency == 'idr':
-                    message += f"💵 IDR: {self._format_idr(float(amount))}\n"
+        # Check if balance_data is directly the balance dict
+        if isinstance(balance_data, dict):
+            has_balance = False
+            
+            for currency, balance in balance_data.items():
+                try:
+                    balance_float = float(balance)
+                    if balance_float > 0:
+                        has_balance = True
+                        if currency.lower() == "idr":
+                            text += f"💵 {currency.upper()}: {format_currency(balance_float)}\n"
+                        else:
+                            text += f"🪙 {currency.upper()}: {balance_float:.8f}\n"
+                except (ValueError, TypeError):
+                    continue
+            
+            if not has_balance:
+                if language == "en":
+                    text += "📭 No balance available or all balances are zero."
                 else:
-                    message += f"₿ {currency.upper()}: {float(amount):.8f}\n"
-        
-        return message
-    
-    def format_signal(self, signal: AISignal, language: str = "id") -> str:
-        """Format AI signal for display"""
-        
-        if language == "en":
-            title = "📊 <b>AI Trading Signal</b>\n\n"
-            pair_text = "Pair"
-            signal_text = "Signal"
-            confidence_text = "Confidence"
-            prediction_text = "Price Prediction"
-            time_text = "Generated"
-            expires_text = "Expires"
+                    text += "📭 Tidak ada saldo tersedia atau semua saldo kosong."
         else:
-            title = "📊 <b>Sinyal Trading AI</b>\n\n"
-            pair_text = "Pasangan"
-            signal_text = "Sinyal"
-            confidence_text = "Keyakinan"
-            prediction_text = "Prediksi Harga"
-            time_text = "Dibuat"
-            expires_text = "Kadaluarsa"
+            if language == "en":
+                text += "📭 No balance data available."
+            else:
+                text += "📭 Data saldo tidak tersedia."
         
-        # Signal emoji
-        signal_emoji = {
-            "buy": "🟢",
-            "sell": "🔴", 
-            "hold": "🟡"
-        }
-        
-        confidence_percent = signal.confidence * 100
-        
-        message = title
-        message += f"📈 {pair_text}: <b>{signal.pair_id.upper().replace('_', '/')}</b>\n"
-        message += f"{signal_emoji.get(signal.signal_type, '🔷')} {signal_text}: <b>{signal.signal_type.upper()}</b>\n"
-        message += f"🎯 {confidence_text}: <b>{confidence_percent:.1f}%</b>\n"
-        
-        if signal.price_prediction and signal.price_prediction > 0:
-            message += f"💰 {prediction_text}: <b>{self._format_price(signal.price_prediction)}</b>\n"
-        
-        message += f"\n⏰ {time_text}: {signal.created_at.strftime('%d/%m/%Y %H:%M')}\n"
-        message += f"⏳ {expires_text}: {signal.expires_at.strftime('%d/%m/%Y %H:%M')}\n"
-        
-        # Add indicators summary
-        if signal.indicators:
-            message += f"\n📋 <b>Indikator Teknis:</b>\n"
-            indicators = signal.indicators
-            
-            if 'rsi' in indicators:
-                rsi = indicators['rsi']
-                rsi_status = "Oversold" if rsi < 30 else "Overbought" if rsi > 70 else "Normal"
-                message += f"• RSI: {rsi:.1f} ({rsi_status})\n"
-            
-            if 'macd' in indicators and 'macd_signal' in indicators:
-                macd_trend = "Bullish" if indicators['macd'] > indicators['macd_signal'] else "Bearish"
-                message += f"• MACD: {macd_trend}\n"
-        
-        return message
+        return text
     
     def format_orders(self, orders_data: Dict[str, Any], language: str = "id") -> str:
         """Format orders data for display"""
-        if not orders_data or not orders_data.get('return', {}).get('orders'):
-            if language == "en":
-                return "📋 <b>Active Orders</b>\n\n❌ No active orders found"
-            else:
-                return "📋 <b>Order Aktif</b>\n\n❌ Tidak ada order aktif"
+        if "error" in orders_data:
+            return f"❌ Error: {orders_data['error']}"
         
         if language == "en":
-            title = "📋 <b>Active Orders</b>\n\n"
-            type_text = "Type"
-            amount_text = "Amount"
-            price_text = "Price"
+            text = "📋 <b>Your Open Orders</b>\n\n"
         else:
-            title = "📋 <b>Order Aktif</b>\n\n"
-            type_text = "Tipe"
-            amount_text = "Jumlah"
-            price_text = "Harga"
+            text = "📋 <b>Order Terbuka Anda</b>\n\n"
         
-        message = title
-        orders = orders_data.get('return', {}).get('orders', {})
-        
-        for pair, pair_orders in orders.items():
-            if pair_orders:
-                message += f"💹 <b>{pair.upper().replace('_', '/')}</b>\n"
+        try:
+            # Check if we have orders data
+            if "return" in orders_data and "orders" in orders_data["return"]:
+                orders = orders_data["return"]["orders"]
                 
-                for order in pair_orders:
-                    order_type = order.get('type', '')
-                    order_emoji = "🟢" if order_type == "buy" else "🔴"
+                # orders is a dict with pair_id as key and list of orders as value
+                if isinstance(orders, dict) and orders:
+                    order_count = 0
+                    for pair_id, pair_orders in orders.items():
+                        if isinstance(pair_orders, list):
+                            for order in pair_orders:
+                                order_type = order.get("type", "")
+                                price = float(order.get("price", 0))
+                                order_id = order.get("order_id", "")
+                                
+                                # Get remaining amount based on order type
+                                if order_type == "buy":
+                                    remain_amount = float(order.get("remain_idr", 0))
+                                    amount_text = f"{format_currency(remain_amount)} IDR"
+                                else:  # sell
+                                    # Try different field names for remaining amount
+                                    remain_amount = 0
+                                    for field in ["remain_btc", "remain_eth", f"remain_{pair_id.split('_')[0]}"]:
+                                        if field in order:
+                                            remain_amount = float(order.get(field, 0))
+                                            break
+                                    amount_text = f"{remain_amount:.8f} {pair_id.split('_')[0].upper()}"
+                                
+                                text += f"📌 #{order_id} - {order_type.upper()} {pair_id.upper()}\n"
+                                text += f"   💰 Price: {format_currency(price)} IDR\n"
+                                text += f"   📊 Amount: {amount_text}\n\n"
+                                order_count += 1
                     
-                    message += f"{order_emoji} {type_text}: {order_type.upper()}\n"
-                    message += f"💰 {amount_text}: {order.get('amount', 0)}\n"
-                    message += f"💵 {price_text}: {self._format_price(float(order.get('price', 0)))}\n"
-                    message += "─────────────\n"
+                    if order_count == 0:
+                        if language == "en":
+                            text += "📭 No open orders."
+                        else:
+                            text += "📭 Tidak ada order terbuka."
+                else:
+                    if language == "en":
+                        text += "📭 No open orders."
+                    else:
+                        text += "📭 Tidak ada order terbuka."
+            else:
+                if language == "en":
+                    text += "📭 No orders data available."
+                else:
+                    text += "📭 Data order tidak tersedia."
+        except Exception as e:
+            logger.error("Error formatting orders", error=str(e))
+            if language == "en":
+                text += "❌ Error formatting orders data."
+            else:
+                text += "❌ Error memformat data order."
         
-        return message
+        return text
+    
+    def format_signal(self, signal: Any, language: str = "id") -> str:
+        """Format AI signal for display"""
+        if not signal:
+            if language == "en":
+                return "❌ No signal available"
+            else:
+                return "❌ Tidak ada sinyal tersedia"
+        
+        if language == "en":
+            text = f"📊 <b>AI Trading Signal</b>\n\n"
+        else:
+            text = f"📊 <b>Sinyal Trading AI</b>\n\n"
+        
+        try:
+            pair_id = getattr(signal, 'pair_id', 'Unknown')
+            signal_type = getattr(signal, 'signal_type', 'HOLD')
+            confidence = getattr(signal, 'confidence', 0.0)
+            price_prediction = getattr(signal, 'price_prediction', 0.0)
+            
+            text += f"🪙 Pair: {pair_id.upper()}\n"
+            text += f"📈 Signal: {signal_type.upper()}\n"
+            text += f"🎯 Confidence: {confidence:.1%}\n"
+            
+            if price_prediction > 0:
+                text += f"💰 Price Target: {format_currency(price_prediction)} IDR\n"
+            
+            if signal_type.upper() == "BUY":
+                text += "\n🟢 <b>Recommendation: BUY</b>"
+            elif signal_type.upper() == "SELL":
+                text += "\n🔴 <b>Recommendation: SELL</b>"
+            else:
+                text += "\n⚪ <b>Recommendation: HOLD</b>"
+                
+        except Exception as e:
+            logger.error("Error formatting signal", error=str(e))
+            text += "❌ Error formatting signal data"
+        
+        return text
     
     def format_trade_success(self, trade_type: str, pair_id: str, amount: float, price: float, language: str = "id") -> str:
         """Format successful trade message"""
