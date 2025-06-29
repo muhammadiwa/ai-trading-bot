@@ -31,7 +31,7 @@ class IndodaxAPI:
         ).hexdigest()
     
     def _get_timestamp(self) -> int:
-        """Get current timestamp in milliseconds"""
+        """Get current timestamp in milliseconds (as required by Indodax)"""
         return int(time.time() * 1000)
     
     # Public API Methods
@@ -148,7 +148,7 @@ class IndodaxAPI:
         params["timestamp"] = self._get_timestamp()
         params["recvWindow"] = 5000
         
-        # Create query string
+        # Create query string for signature (without the signature itself)
         query_string = "&".join([f"{k}={v}" for k, v in sorted(params.items())])
         
         # Generate signature
@@ -162,19 +162,26 @@ class IndodaxAPI:
         }
         
         try:
-            response = requests.post(self.tapi_url, data=params, headers=headers)
-            response.raise_for_status()
+            # Use proper async request handling
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.tapi_url, data=params, headers=headers) as response:
+                    response.raise_for_status()
+                    result = await response.json()
+                    
+                    # Check for API errors
+                    if result.get("success") == 0:
+                        error_msg = result.get("error", "Unknown API error")
+                        error_code = result.get("error_code", "unknown")
+                        logger.error("Indodax API error", method=method, error=error_msg, error_code=error_code)
+                        raise Exception(f"Indodax API Error [{error_code}]: {error_msg}")
+                    
+                    logger.info("API request successful", method=method)
+                    return result
             
-            result = response.json()
-            
-            # Check for API errors
-            if result.get("success") == 0:
-                error_msg = result.get("error", "Unknown API error")
-                logger.error("API error", method=method, error=error_msg)
-                raise Exception(f"API Error: {error_msg}")
-            
-            return result
-            
+        except aiohttp.ClientError as e:
+            logger.error("HTTP request failed", method=method, error=str(e))
+            raise Exception(f"Connection error: {str(e)}")
         except Exception as e:
             logger.error("Private API request failed", method=method, error=str(e))
             raise

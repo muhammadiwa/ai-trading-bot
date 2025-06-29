@@ -90,6 +90,15 @@ class TelegramBot:
         self.router.callback_query(F.data.startswith("lang_"))(self.callback_language)
         self.router.callback_query(F.data.startswith("admin_"))(self.callback_admin)
         
+        # Main menu callback handlers
+        self.router.callback_query(F.data == "portfolio")(self.callback_portfolio)
+        self.router.callback_query(F.data == "balance")(self.callback_balance)
+        self.router.callback_query(F.data == "signals")(self.callback_signals)
+        self.router.callback_query(F.data == "trading")(self.callback_trading)
+        self.router.callback_query(F.data == "orders")(self.callback_orders)
+        self.router.callback_query(F.data == "settings")(self.callback_settings_menu)
+        self.router.callback_query(F.data == "help")(self.callback_help)
+        
         # FSM handlers
         self.router.message(RegistrationStates.waiting_for_api_key)(self.process_api_key)
         self.router.message(RegistrationStates.waiting_for_secret_key)(self.process_secret_key)
@@ -488,28 +497,39 @@ class TelegramBot:
             data = await state.get_data()
             api_key = data.get('api_key')
             
+            # Show testing message
+            await message.answer("🔄 Memvalidasi API credentials...")
+            
             # Test API credentials
             test_api = indodax_api.__class__(api_key, secret_key)
             try:
-                await test_api.get_info()
+                # Call a simple API to test credentials
+                result = await test_api.get_info()
                 
-                # Save encrypted credentials
-                user = await self._get_or_create_user(message.from_user)
-                user.indodax_api_key = encrypt_api_key(api_key)
-                user.indodax_secret_key = encrypt_api_key(secret_key)
-                
-                db = get_db()
-                try:
-                    db.merge(user)
-                    db.commit()
-                finally:
-                    db.close()
-                
-                await state.clear()
-                await message.answer("✅ Pendaftaran berhasil! Akun Anda telah terhubung dengan Indodax.")
+                if result and result.get("success") == 1:
+                    # Save encrypted credentials
+                    user = await self._get_or_create_user(message.from_user)
+                    user.indodax_api_key = encrypt_api_key(api_key)
+                    user.indodax_secret_key = encrypt_api_key(secret_key)
+                    
+                    db = get_db()
+                    try:
+                        db.merge(user)
+                        db.commit()
+                    finally:
+                        db.close()
+                    
+                    await state.clear()
+                    await message.answer("✅ Pendaftaran berhasil! Akun Anda telah terhubung dengan Indodax.")
+                else:
+                    error_msg = result.get("error", "Unknown error") if result else "API call failed"
+                    logger.error("API validation failed", error=error_msg)
+                    await message.answer(f"❌ API credentials tidak valid: {error_msg}")
+                    await state.clear()
                 
             except Exception as e:
-                await message.answer("❌ API credentials tidak valid. Periksa kembali API key dan secret key Anda.")
+                logger.error("Failed to validate API credentials", error=str(e))
+                await message.answer(f"❌ Gagal memvalidasi API credentials: {str(e)}")
                 await state.clear()
             
         except Exception as e:
@@ -1041,3 +1061,151 @@ Order akan dieksekusi sesuai kondisi pasar.
         except Exception as e:
             logger.error("Failed to broadcast message", error=str(e))
             return 0, 0
+    
+    # Main Menu Callback Handlers
+    
+    async def callback_portfolio(self, callback: CallbackQuery):
+        """Handle portfolio callback"""
+        try:
+            user = await self._get_or_create_user(callback.from_user)
+            
+            if not user.indodax_api_key:
+                await callback.message.edit_text("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+                return
+            
+            # Get portfolio data
+            portfolio_data = await self._get_portfolio_data(user)
+            if "error" in portfolio_data:
+                await callback.message.edit_text(f"❌ Error: {portfolio_data['error']}")
+                return
+                
+            portfolio_text = self.messages.format_portfolio(portfolio_data, user.language)
+            await callback.message.edit_text(portfolio_text)
+            await callback.answer()
+            
+        except Exception as e:
+            logger.error("Failed to handle portfolio callback", error=str(e))
+            await callback.answer("❌ Terjadi kesalahan.")
+
+    async def callback_balance(self, callback: CallbackQuery):
+        """Handle balance callback"""
+        try:
+            user = await self._get_or_create_user(callback.from_user)
+            
+            if not user.indodax_api_key:
+                await callback.message.edit_text("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+                return
+                
+            # Get balance from Indodax
+            api_key = decrypt_api_key(user.indodax_api_key)
+            secret_key = decrypt_api_key(user.indodax_secret_key)
+            
+            user_api = indodax_api.__class__(api_key, secret_key)
+            balance_data = await user_api.get_balance()
+            
+            balance_text = self.messages.format_balance(balance_data, user.language)
+            await callback.message.edit_text(balance_text)
+            await callback.answer()
+            
+        except Exception as e:
+            logger.error("Failed to handle balance callback", error=str(e))
+            await callback.answer("❌ Terjadi kesalahan.")
+
+    async def callback_signals(self, callback: CallbackQuery):
+        """Handle signals callback"""
+        try:
+            user = await self._get_or_create_user(callback.from_user)
+            
+            # Generate signal
+            signal = await self.signal_generator.generate_signal("btc_idr")
+            
+            if signal:
+                signal_text = self.messages.format_signal(signal, user.language)
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="🔄 Update Signal",
+                        callback_data="signal_update_btc_idr"
+                    ),
+                    InlineKeyboardButton(
+                        text="💹 Trade",
+                        callback_data=f"trade_btc_idr_{signal.signal_type}"
+                    )
+                ]])
+                
+                await callback.message.edit_text(signal_text, reply_markup=keyboard)
+            else:
+                await callback.message.edit_text("❌ Tidak dapat menghasilkan sinyal saat ini.")
+                
+            await callback.answer()
+            
+        except Exception as e:
+            logger.error("Failed to handle signals callback", error=str(e))
+            await callback.answer("❌ Terjadi kesalahan.")
+
+    async def callback_trading(self, callback: CallbackQuery):
+        """Handle trading callback"""
+        try:
+            user = await self._get_or_create_user(callback.from_user)
+            
+            if not user.indodax_api_key:
+                await callback.message.edit_text("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+                return
+                
+            keyboard = create_trading_keyboard("buy", user.language)
+            await callback.message.edit_text("💹 Pilih jenis trading:", reply_markup=keyboard)
+            await callback.answer()
+            
+        except Exception as e:
+            logger.error("Failed to handle trading callback", error=str(e))
+            await callback.answer("❌ Terjadi kesalahan.")
+
+    async def callback_orders(self, callback: CallbackQuery):
+        """Handle orders callback"""
+        try:
+            user = await self._get_or_create_user(callback.from_user)
+            
+            if not user.indodax_api_key:
+                await callback.message.edit_text("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+                return
+                
+            # Get open orders
+            api_key = decrypt_api_key(user.indodax_api_key)
+            secret_key = decrypt_api_key(user.indodax_secret_key)
+            
+            user_api = indodax_api.__class__(api_key, secret_key)
+            orders_data = await user_api.get_open_orders()
+            
+            orders_text = self.messages.format_orders(orders_data, user.language)
+            await callback.message.edit_text(orders_text)
+            await callback.answer()
+            
+        except Exception as e:
+            logger.error("Failed to handle orders callback", error=str(e))
+            await callback.answer("❌ Terjadi kesalahan.")
+
+    async def callback_settings_menu(self, callback: CallbackQuery):
+        """Handle settings menu callback"""
+        try:
+            user = await self._get_or_create_user(callback.from_user)
+            settings_keyboard = create_settings_keyboard(user.language)
+            settings_text = self.messages.get_settings_message(user.language)
+            
+            await callback.message.edit_text(settings_text, reply_markup=settings_keyboard)
+            await callback.answer()
+            
+        except Exception as e:
+            logger.error("Failed to handle settings callback", error=str(e))
+            await callback.answer("❌ Terjadi kesalahan.")
+
+    async def callback_help(self, callback: CallbackQuery):
+        """Handle help callback"""
+        try:
+            user = await self._get_or_create_user(callback.from_user)
+            help_text = self.messages.get_help_message(user.language)
+            
+            await callback.message.edit_text(help_text)
+            await callback.answer()
+            
+        except Exception as e:
+            logger.error("Failed to handle help callback", error=str(e))
+            await callback.answer("❌ Terjadi kesalahan.")
