@@ -1680,11 +1680,24 @@ Pilih opsi di bawah:
             # Parse command arguments
             command_parts = message.text.split() if message.text else []
             
-            if len(command_parts) < 2:
+            if len(command_parts) < 4:
                 help_text = """
 📊 <b>Backtesting</b>
 
-Gunakan: <code>/backtest [strategy] [period]</code>
+Gunakan: <code>/backtest [pair] [strategy] [period]</code>
+
+<b>Pairs:</b>
+• <code>btc</code> - Bitcoin
+• <code>eth</code> - Ethereum  
+• <code>bnb</code> - Binance Coin
+• <code>ada</code> - Cardano
+• <code>sol</code> - Solana
+• <code>dot</code> - Polkadot
+• <code>link</code> - Chainlink
+• <code>uni</code> - Uniswap
+• <code>ltc</code> - Litecoin
+• <code>xrp</code> - Ripple
+• <code>matic</code> - Polygon
 
 <b>Strategies:</b>
 • <code>ai_signals</code> - Backtest AI signals
@@ -1692,21 +1705,46 @@ Gunakan: <code>/backtest [strategy] [period]</code>
 • <code>buy_hold</code> - Buy and hold strategy
 
 <b>Periods:</b>
-• <code>7d</code> - 7 hari terakhir
-• <code>30d</code> - 30 hari terakhir
-• <code>90d</code> - 90 hari terakhir
+• <code>7d</code> - 7 hari
+• <code>30d</code> - 30 hari  
+• <code>90d</code> - 90 hari
 
 <b>Contoh:</b>
-<code>/backtest ai_signals 30d</code>
-<code>/backtest dca 90d</code>
+<code>/backtest btc ai_signals 30d</code>
+<code>/backtest eth buy_hold 90d</code>
+<code>/backtest sol dca 7d</code>
+
+⚠️ <i>Semua parameter wajib diisi!</i>
 """
                 await message.answer(help_text, parse_mode="HTML")
                 return
             
-            strategy = command_parts[1].lower()
-            period = command_parts[2] if len(command_parts) > 2 else "30d"
+            pair_symbol = command_parts[1].lower()
+            strategy = command_parts[2].lower()
+            period = command_parts[3].lower()
             
-            await message.answer("🔄 Menjalankan backtest... Mohon tunggu sebentar.")
+            # Validate pair
+            valid_pairs = ["btc", "eth", "bnb", "ada", "sol", "dot", "link", "uni", "ltc", "xrp", "matic", "avax"]
+            if pair_symbol not in valid_pairs:
+                await message.answer(f"❌ Pair {pair_symbol.upper()} tidak didukung. Gunakan salah satu: {', '.join([p.upper() for p in valid_pairs])}")
+                return
+            
+            # Convert to pair_id format
+            pair_id = f"{pair_symbol}_idr"
+            
+            # Validate strategy
+            valid_strategies = ["ai_signals", "dca", "buy_hold"]
+            if strategy not in valid_strategies:
+                await message.answer(f"❌ Strategy {strategy} tidak didukung. Gunakan salah satu: {', '.join(valid_strategies)}")
+                return
+            
+            # Validate period
+            valid_periods = ["7d", "30d", "90d"]
+            if period not in valid_periods:
+                await message.answer(f"❌ Period {period} tidak didukung. Gunakan salah satu: {', '.join(valid_periods)}")
+                return
+            
+            await message.answer(f"🔄 Menjalankan backtest {strategy} untuk {pair_symbol.upper()}... Mohon tunggu sebentar.")
             
             # Run backtest
             from core.backtester import Backtester
@@ -1726,11 +1764,11 @@ Gunakan: <code>/backtest [strategy] [period]</code>
                 start_date = end_date - timedelta(days=30)  # default
             
             results = await backtester.run_backtest(
-                strategy=strategy,
-                pair_id="btc_idr",  # Default to BTC
+                pair_id=pair_id,
                 start_date=start_date,
                 end_date=end_date,
-                initial_balance=1000000  # 1M IDR
+                initial_balance=1000000,  # 1M IDR
+                strategy=strategy
             )
             
             if results:
@@ -1739,7 +1777,7 @@ Gunakan: <code>/backtest [strategy] [period]</code>
 
 Strategy: {strategy.upper()}
 Period: {period}
-Pair: BTC/IDR
+Pair: {pair_symbol.upper()}/IDR
 
 <b>Performance:</b>
 • Total Return: {results.total_return_percent:.2f}%
