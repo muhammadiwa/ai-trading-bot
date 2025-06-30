@@ -1681,23 +1681,34 @@ Pilih opsi di bawah:
             command_parts = message.text.split() if message.text else []
             
             if len(command_parts) < 4:
-                help_text = """
+                # Get available pairs from API for help text
+                try:
+                    from core.indodax_api import indodax_api
+                    pairs_data = await indodax_api.get_pairs()
+                    
+                    # Extract traded currencies (remove _idr suffix)
+                    available_pairs = []
+                    for pair in pairs_data[:15]:  # Show first 15 pairs in help
+                        if pair.get('ticker_id', '').endswith('_idr'):
+                            symbol = pair['ticker_id'].replace('_idr', '')
+                            available_pairs.append(symbol.upper())
+                    
+                    pairs_text = ' • '.join([f"<code>{p.lower()}</code>" for p in available_pairs])
+                    more_pairs_count = len(pairs_data) - 15 if len(pairs_data) > 15 else 0
+                    
+                except Exception as e:
+                    logger.error("Failed to fetch pairs for help", error=str(e))
+                    pairs_text = "<code>btc</code> • <code>eth</code> • <code>ada</code> • <code>sol</code> • dll"
+                    more_pairs_count = 0
+                
+                help_text = f"""
 📊 <b>Backtesting</b>
 
 Gunakan: <code>/backtest [pair] [strategy] [period]</code>
 
-<b>Pairs:</b>
-• <code>btc</code> - Bitcoin
-• <code>eth</code> - Ethereum  
-• <code>bnb</code> - Binance Coin
-• <code>ada</code> - Cardano
-• <code>sol</code> - Solana
-• <code>dot</code> - Polkadot
-• <code>link</code> - Chainlink
-• <code>uni</code> - Uniswap
-• <code>ltc</code> - Litecoin
-• <code>xrp</code> - Ripple
-• <code>matic</code> - Polygon
+<b>Pairs tersedia:</b>
+{pairs_text}
+{f"<i>...dan {more_pairs_count} pair lainnya</i>" if more_pairs_count > 0 else ""}
 
 <b>Strategies:</b>
 • <code>ai_signals</code> - Backtest AI signals
@@ -1723,10 +1734,37 @@ Gunakan: <code>/backtest [pair] [strategy] [period]</code>
             strategy = command_parts[2].lower()
             period = command_parts[3].lower()
             
-            # Validate pair
-            valid_pairs = ["btc", "eth", "bnb", "ada", "sol", "dot", "link", "uni", "ltc", "xrp", "matic", "avax"]
-            if pair_symbol not in valid_pairs:
-                await message.answer(f"❌ Pair {pair_symbol.upper()} tidak didukung. Gunakan salah satu: {', '.join([p.upper() for p in valid_pairs])}")
+            # Validate pair against API data
+            try:
+                from core.indodax_api import indodax_api
+                pairs_data = await indodax_api.get_pairs()
+                
+                # Extract valid pair symbols
+                valid_pairs = []
+                pair_found = False
+                
+                for pair in pairs_data:
+                    if pair.get('ticker_id', '').endswith('_idr'):
+                        symbol = pair['ticker_id'].replace('_idr', '')
+                        valid_pairs.append(symbol.lower())
+                        if symbol.lower() == pair_symbol:
+                            pair_found = True
+                
+                if not pair_found:
+                    # Show available pairs in chunks
+                    pairs_list = [p.upper() for p in valid_pairs[:20]]  # Show first 20
+                    remaining = len(valid_pairs) - 20 if len(valid_pairs) > 20 else 0
+                    
+                    pairs_str = ', '.join(pairs_list)
+                    if remaining > 0:
+                        pairs_str += f" (+{remaining} lainnya)"
+                    
+                    await message.answer(f"❌ Pair {pair_symbol.upper()} tidak tersedia.\n\n🪙 <b>Pairs tersedia:</b>\n{pairs_str}", parse_mode="HTML")
+                    return
+                    
+            except Exception as e:
+                logger.error("Failed to validate pair", error=str(e))
+                await message.answer("❌ Gagal memvalidasi pair. Silakan coba lagi.")
                 return
             
             # Convert to pair_id format
