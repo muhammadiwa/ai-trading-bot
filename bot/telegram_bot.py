@@ -355,6 +355,9 @@ class TelegramBot:
                 return
             
             # Parse command arguments
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid")
+                return
             command_parts = message.text.split()
             
             if len(command_parts) >= 3:
