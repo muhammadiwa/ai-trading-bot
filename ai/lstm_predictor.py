@@ -4,7 +4,7 @@ LSTM-based price prediction model for cryptocurrency trading
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union
 import joblib
 import os
 import structlog
@@ -12,15 +12,25 @@ import structlog
 try:
     from sklearn.preprocessing import MinMaxScaler
     from sklearn.metrics import mean_squared_error, mean_absolute_error
-    import tensorflow as tf
-    from tensorflow.keras.models import Sequential, load_model
-    from tensorflow.keras.layers import LSTM, Dense, Dropout
-    from tensorflow.keras.optimizers import Adam
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    MinMaxScaler = None
+
+try:
+    import tensorflow as tf  # type: ignore
+    from tensorflow.keras.models import Sequential, load_model  # type: ignore
+    from tensorflow.keras.layers import LSTM, Dense, Dropout  # type: ignore
+    from tensorflow.keras.optimizers import Adam  # type: ignore
     TENSORFLOW_AVAILABLE = True
 except ImportError:
     TENSORFLOW_AVAILABLE = False
-    logger = structlog.get_logger(__name__)
-    logger.warning("TensorFlow not available, LSTM predictor will use fallback methods")
+    Sequential = None
+    load_model = None
+    LSTM = None
+    Dense = None
+    Dropout = None
+    Adam = None
 
 from core.database import get_db, PriceHistory
 from core.indodax_api import IndodaxAPI
@@ -42,19 +52,28 @@ class LSTMPredictor:
         os.makedirs(self.model_path, exist_ok=True)
         os.makedirs(self.scalers_path, exist_ok=True)
         
-        if TENSORFLOW_AVAILABLE:
+        if TENSORFLOW_AVAILABLE and SKLEARN_AVAILABLE:
             self._load_existing_models()
+        else:
+            logger = structlog.get_logger(__name__)
+            if not TENSORFLOW_AVAILABLE:
+                logger.warning("TensorFlow not available, LSTM predictor will use fallback methods")
+            if not SKLEARN_AVAILABLE:
+                logger.warning("Scikit-learn not available, some features may be limited")
     
     def _load_existing_models(self):
         """Load existing trained models and scalers"""
         try:
+            if not TENSORFLOW_AVAILABLE or not SKLEARN_AVAILABLE:
+                return
+                
             for file in os.listdir(self.model_path):
                 if file.endswith('.h5'):
                     pair_id = file.replace('.h5', '')
                     model_path = os.path.join(self.model_path, file)
                     scaler_path = os.path.join(self.scalers_path, f"{pair_id}_scaler.pkl")
                     
-                    if os.path.exists(scaler_path):
+                    if os.path.exists(scaler_path) and load_model is not None:
                         self.models[pair_id] = load_model(model_path)
                         self.scalers[pair_id] = joblib.load(scaler_path)
                         logger.info("Loaded LSTM model", pair_id=pair_id)
@@ -131,7 +150,12 @@ class LSTMPredictor:
     async def _train_model(self, pair_id: str) -> bool:
         """Train LSTM model for a specific pair"""
         try:
-            if not TENSORFLOW_AVAILABLE:
+            if not TENSORFLOW_AVAILABLE or not SKLEARN_AVAILABLE:
+                logger.warning("TensorFlow or Scikit-learn not available for training", pair_id=pair_id)
+                return False
+            
+            if Sequential is None or LSTM is None or Dense is None or Dropout is None or Adam is None:
+                logger.warning("TensorFlow components not available for training", pair_id=pair_id)
                 return False
             
             logger.info("Starting LSTM model training", pair_id=pair_id)
@@ -299,13 +323,16 @@ class LSTMPredictor:
             logger.error("Failed to fetch historical data from API", pair_id=pair_id, error=str(e))
             return None
     
-    def _prepare_training_data(self, df: pd.DataFrame) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[MinMaxScaler]]:
+    def _prepare_training_data(self, df: pd.DataFrame) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[Any]]:
         """Prepare data for LSTM training"""
         try:
             # Use close prices for training
-            prices = df['close'].values.reshape(-1, 1)
+            prices = np.array(df['close'].values).reshape(-1, 1)
             
             # Scale data
+            if not SKLEARN_AVAILABLE or MinMaxScaler is None:
+                return None, None, None
+                
             scaler = MinMaxScaler(feature_range=(0, 1))
             scaled_prices = scaler.fit_transform(prices)
             
@@ -331,7 +358,7 @@ class LSTMPredictor:
                 return None
             
             # Get last 60 days of close prices
-            prices = df['close'].tail(self.lookback_days).values.reshape(-1, 1)
+            prices = np.array(df['close'].tail(self.lookback_days).values).reshape(-1, 1)
             
             if len(prices) < self.lookback_days:
                 return None
