@@ -82,6 +82,12 @@ class TelegramBot:
         self.router.message(Command("broadcast"))(self.cmd_broadcast)
         self.router.message(Command("stats"))(self.cmd_stats)
         
+        # New AI and advanced features commands
+        self.router.message(Command("ask"))(self.cmd_ask)
+        self.router.message(Command("autotrading"))(self.cmd_autotrading)
+        self.router.message(Command("dca"))(self.cmd_dca)
+        self.router.message(Command("backtest"))(self.cmd_backtest)
+        
         # Callback query handlers
         self.router.callback_query(F.data.startswith("trade_"))(self.callback_trade)
         self.router.callback_query(F.data.startswith("signal_"))(self.callback_signal)
@@ -148,6 +154,10 @@ class TelegramBot:
             BotCommand(command="sell", description="🔴 Jual cryptocurrency"),
             BotCommand(command="orders", description="📋 Lihat order aktif"),
             BotCommand(command="settings", description="⚙️ Pengaturan akun"),
+            BotCommand(command="ask", description="🤖 AI assistant"),
+            BotCommand(command="autotrading", description="🔄 Auto trading"),
+            BotCommand(command="dca", description="💰 Dollar Cost Averaging"),
+            BotCommand(command="backtest", description="📊 Backtest strategi"),
         ]
         
         await self.bot.set_my_commands(commands)
@@ -275,8 +285,8 @@ class TelegramBot:
                 return
             
             # Get balance from Indodax
-            api_key = decrypt_api_key(user.indodax_api_key)
-            secret_key = decrypt_api_key(user.indodax_secret_key)
+            api_key = decrypt_api_key(str(user.indodax_api_key))
+            secret_key = decrypt_api_key(str(user.indodax_secret_key))
             
             user_api = IndodaxAPI(api_key, secret_key)
             balance_data = await user_api.get_balance()
@@ -345,6 +355,9 @@ class TelegramBot:
                 return
             
             # Parse command arguments
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid")
+                return
             command_parts = message.text.split()
             
             if len(command_parts) >= 3:
@@ -379,8 +392,8 @@ class TelegramBot:
                 return
             
             # Get open orders
-            api_key = decrypt_api_key(user.indodax_api_key)
-            secret_key = decrypt_api_key(user.indodax_secret_key)
+            api_key = decrypt_api_key(str(user.indodax_api_key))
+            secret_key = decrypt_api_key(str(user.indodax_secret_key))
             
             user_api = IndodaxAPI(api_key, secret_key)
             orders_data = await user_api.get_open_orders()
@@ -892,8 +905,8 @@ Lanjutkan trading?
                 return {"error": "API credentials not set"}
             
             # Decrypt API credentials
-            api_key = decrypt_api_key(user.indodax_api_key)
-            secret_key = decrypt_api_key(user.indodax_secret_key)
+            api_key = decrypt_api_key(str(user.indodax_api_key))
+            secret_key = decrypt_api_key(str(user.indodax_secret_key))
             
             # Create user-specific API client
             user_api = IndodaxAPI(api_key, secret_key)
@@ -950,8 +963,8 @@ Lanjutkan trading?
                 return
             
             # Decrypt API credentials
-            api_key = decrypt_api_key(user.indodax_api_key)
-            secret_key = decrypt_api_key(user.indodax_secret_key)
+            api_key = decrypt_api_key(str(user.indodax_api_key))
+            secret_key = decrypt_api_key(str(user.indodax_secret_key))
             
             # Create user-specific API client
             user_api = IndodaxAPI(api_key, secret_key)
@@ -1155,8 +1168,8 @@ Order akan dieksekusi sesuai kondisi pasar.
                     return
                 
                 # Decrypt API credentials
-                api_key = decrypt_api_key(user.indodax_api_key)
-                secret_key = decrypt_api_key(user.indodax_secret_key)
+                api_key = decrypt_api_key(str(user.indodax_api_key))
+                secret_key = decrypt_api_key(str(user.indodax_secret_key))
                 user_api = IndodaxAPI(api_key, secret_key)
                 
                 # Check order status periodically
@@ -1322,8 +1335,8 @@ Lanjutkan trading?
         """Show buy amount selection with balance and percentage options"""
         try:
             # Get user's IDR balance
-            api_key = decrypt_api_key(user.indodax_api_key)
-            secret_key = decrypt_api_key(user.indodax_secret_key)
+            api_key = decrypt_api_key(str(user.indodax_api_key))
+            secret_key = decrypt_api_key(str(user.indodax_secret_key))
             user_api = IndodaxAPI(api_key, secret_key)
             
             balance_data = await user_api.get_balance()
@@ -1397,8 +1410,8 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
                 return
                 
             # Get balance from Indodax
-            api_key = decrypt_api_key(user.indodax_api_key)
-            secret_key = decrypt_api_key(user.indodax_secret_key)
+            api_key = decrypt_api_key(str(user.indodax_api_key))
+            secret_key = decrypt_api_key(str(user.indodax_secret_key))
             
             user_api = IndodaxAPI(api_key, secret_key)
             balance_data = await user_api.get_balance()
@@ -1469,8 +1482,8 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
                 return
                 
             # Get open orders
-            api_key = decrypt_api_key(user.indodax_api_key)
-            secret_key = decrypt_api_key(user.indodax_secret_key)
+            api_key = decrypt_api_key(str(user.indodax_api_key))
+            secret_key = decrypt_api_key(str(user.indodax_secret_key))
             
             user_api = IndodaxAPI(api_key, secret_key)
             orders_data = await user_api.get_open_orders()
@@ -1509,3 +1522,554 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
         except Exception as e:
             logger.error("Failed to handle help callback", error=str(e))
             await callback.answer("❌ Terjadi kesalahan.")
+    
+    async def cmd_ask(self, message: Message):
+        """Handle /ask command for AI assistant"""
+        try:
+            user = await self._get_or_create_user(message.from_user)
+            
+            # Parse the question from the command
+            command_parts = message.text.split(' ', 1) if message.text else []
+            if len(command_parts) < 2:
+                help_text = """
+❓ <b>AI Assistant</b>
+
+Gunakan: <code>/ask [pertanyaan Anda]</code>
+
+Contoh:
+• <code>/ask Bagaimana cara trading Bitcoin?</code>
+• <code>/ask Apa itu DCA?</code>
+• <code>/ask Kapan waktu yang tepat untuk buy?</code>
+• <code>/ask Analisa chart BTC hari ini</code>
+
+💡 AI akan membantu menjawab pertanyaan seputar trading dan cryptocurrency.
+"""
+                await message.answer(help_text, parse_mode="HTML")
+                return
+            
+            question = command_parts[1].strip()
+            
+            # Show typing indicator
+            await message.answer("🤔 AI sedang memikirkan jawaban...")
+            
+            # Generate AI response
+            response = await self._generate_ai_response(question, user)
+            
+            await message.answer(response, parse_mode="HTML")
+            
+        except Exception as e:
+            logger.error("Failed to handle ask command", error=str(e))
+            await message.answer("❌ Maaf, terjadi kesalahan dalam AI assistant.")
+    
+    async def cmd_autotrading(self, message: Message):
+        """Handle /autotrading command"""
+        try:
+            user = await self._get_or_create_user(message.from_user)
+            
+            if not getattr(user, 'indodax_api_key', None):
+                await message.answer("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+                return
+            
+            # Check current auto-trading status
+            auto_trading_enabled = getattr(user, 'auto_trading_enabled', False) or False
+            current_status = "✅ Aktif" if auto_trading_enabled else "❌ Tidak Aktif"
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="🟢 Aktifkan" if not auto_trading_enabled else "🔴 Nonaktifkan", 
+                                       callback_data="autotrading_toggle"),
+                ],
+                [
+                    InlineKeyboardButton(text="⚙️ Pengaturan", callback_data="autotrading_settings"),
+                    InlineKeyboardButton(text="📊 Status", callback_data="autotrading_status")
+                ]
+            ])
+            
+            auto_trade_amount = getattr(user, 'auto_trade_amount', None) or 100000
+            
+            auto_trading_text = f"""
+🤖 <b>Auto Trading</b>
+
+Status: {current_status}
+Jumlah per Trade: {format_currency(float(auto_trade_amount))} IDR
+
+<b>Fitur Auto Trading:</b>
+• Eksekusi otomatis berdasarkan sinyal AI
+• Risk management terintegrasi
+• Stop loss dan take profit otomatis
+• Monitoring 24/7
+
+Pilih opsi di bawah:
+"""
+            
+            await message.answer(auto_trading_text, reply_markup=keyboard)
+            
+        except Exception as e:
+            logger.error("Failed to handle autotrading command", error=str(e))
+            await message.answer("❌ Terjadi kesalahan saat mengakses auto trading.")
+    
+    async def cmd_dca(self, message: Message):
+        """Handle /dca command"""
+        try:
+            user = await self._get_or_create_user(message.from_user)
+            
+            if not getattr(user, 'indodax_api_key', None):
+                await message.answer("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+                return
+            
+            # Get user settings
+            db = get_db()
+            try:
+                settings_record = db.query(UserSettings).filter(UserSettings.user_id == user.id).first()
+                if not settings_record:
+                    settings_record = UserSettings(user_id=user.id)
+                    db.add(settings_record)
+                    db.commit()
+                
+                dca_enabled = getattr(settings_record, 'dca_enabled', False) or False
+                dca_status = "✅ Aktif" if dca_enabled else "❌ Tidak Aktif"
+                dca_amount_value = getattr(settings_record, 'dca_amount', None) or 100000
+                dca_amount = format_currency(float(dca_amount_value))
+                dca_interval = getattr(settings_record, 'dca_interval', 'daily') or 'daily'
+                dca_interval = dca_interval.capitalize()
+                
+            finally:
+                db.close()
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="🟢 Aktifkan DCA" if not dca_enabled else "🔴 Nonaktifkan DCA", 
+                                       callback_data="dca_toggle"),
+                ],
+                [
+                    InlineKeyboardButton(text="💰 Set Jumlah", callback_data="dca_amount"),
+                    InlineKeyboardButton(text="📅 Set Interval", callback_data="dca_interval")
+                ],
+                [
+                    InlineKeyboardButton(text="📊 Riwayat DCA", callback_data="dca_history")
+                ]
+            ])
+            
+            dca_text = f"""
+💰 <b>Dollar Cost Averaging (DCA)</b>
+
+Status: {dca_status}
+Jumlah: {dca_amount} IDR
+Interval: {dca_interval}
+
+<b>Tentang DCA:</b>
+DCA adalah strategi investasi berkala dengan jumlah tetap, mengurangi dampak volatilitas harga.
+
+<b>Keuntungan:</b>
+• Mengurangi risiko timing
+• Disiplin investasi jangka panjang
+• Cocok untuk pemula
+• Otomatis dan konsisten
+
+Pilih opsi di bawah:
+"""
+            
+            await message.answer(dca_text, reply_markup=keyboard)
+            
+        except Exception as e:
+            logger.error("Failed to handle DCA command", error=str(e))
+            await message.answer("❌ Terjadi kesalahan saat mengakses DCA.")
+    
+    async def cmd_backtest(self, message: Message):
+        """Handle /backtest command"""
+        try:
+            user = await self._get_or_create_user(message.from_user)
+            
+            # Parse command arguments
+            command_parts = message.text.split() if message.text else []
+            
+            if len(command_parts) < 4:
+                # Get available pairs from API for help text
+                try:
+                    from core.indodax_api import indodax_api
+                    pairs_data = await indodax_api.get_pairs()
+                    
+                    # Extract traded currencies (remove _idr suffix)
+                    available_pairs = []
+                    for pair in pairs_data[:15]:  # Show first 15 pairs in help
+                        if pair.get('ticker_id', '').endswith('_idr'):
+                            symbol = pair['ticker_id'].replace('_idr', '')
+                            available_pairs.append(symbol.upper())
+                    
+                    pairs_text = ' • '.join([f"<code>{p.lower()}</code>" for p in available_pairs])
+                    more_pairs_count = len(pairs_data) - 15 if len(pairs_data) > 15 else 0
+                    
+                except Exception as e:
+                    logger.error("Failed to fetch pairs for help", error=str(e))
+                    pairs_text = "<code>btc</code> • <code>eth</code> • <code>ada</code> • <code>sol</code> • dll"
+                    more_pairs_count = 0
+                
+                help_text = f"""
+📊 <b>Backtesting</b>
+
+Gunakan: <code>/backtest [pair] [strategy] [period]</code>
+
+<b>Pairs tersedia:</b>
+{pairs_text}
+{f"<i>...dan {more_pairs_count} pair lainnya</i>" if more_pairs_count > 0 else ""}
+
+<b>Strategies:</b>
+• <code>ai_signals</code> - Backtest AI signals
+• <code>dca</code> - Backtest DCA strategy
+• <code>buy_hold</code> - Buy and hold strategy
+
+<b>Periods:</b>
+• <code>7d</code> - 7 hari
+• <code>30d</code> - 30 hari  
+• <code>90d</code> - 90 hari
+
+<b>Contoh:</b>
+<code>/backtest btc ai_signals 30d</code>
+<code>/backtest eth buy_hold 90d</code>
+<code>/backtest sol dca 7d</code>
+
+⚠️ <i>Semua parameter wajib diisi!</i>
+"""
+                await message.answer(help_text, parse_mode="HTML")
+                return
+            
+            pair_symbol = command_parts[1].lower()
+            strategy = command_parts[2].lower()
+            period = command_parts[3].lower()
+            
+            # Validate pair against API data
+            try:
+                from core.indodax_api import indodax_api
+                pairs_data = await indodax_api.get_pairs()
+                
+                # Extract valid pair symbols
+                valid_pairs = []
+                pair_found = False
+                
+                for pair in pairs_data:
+                    if pair.get('ticker_id', '').endswith('_idr'):
+                        symbol = pair['ticker_id'].replace('_idr', '')
+                        valid_pairs.append(symbol.lower())
+                        if symbol.lower() == pair_symbol:
+                            pair_found = True
+                
+                if not pair_found:
+                    # Show available pairs in chunks
+                    pairs_list = [p.upper() for p in valid_pairs[:20]]  # Show first 20
+                    remaining = len(valid_pairs) - 20 if len(valid_pairs) > 20 else 0
+                    
+                    pairs_str = ', '.join(pairs_list)
+                    if remaining > 0:
+                        pairs_str += f" (+{remaining} lainnya)"
+                    
+                    await message.answer(f"❌ Pair {pair_symbol.upper()} tidak tersedia.\n\n🪙 <b>Pairs tersedia:</b>\n{pairs_str}", parse_mode="HTML")
+                    return
+                    
+            except Exception as e:
+                logger.error("Failed to validate pair", error=str(e))
+                await message.answer("❌ Gagal memvalidasi pair. Silakan coba lagi.")
+                return
+            
+            # Convert to pair_id format
+            pair_id = f"{pair_symbol}_idr"
+            
+            # Validate strategy
+            valid_strategies = ["ai_signals", "dca", "buy_hold"]
+            if strategy not in valid_strategies:
+                await message.answer(f"❌ Strategy {strategy} tidak didukung. Gunakan salah satu: {', '.join(valid_strategies)}")
+                return
+            
+            # Validate period
+            valid_periods = ["7d", "30d", "90d"]
+            if period not in valid_periods:
+                await message.answer(f"❌ Period {period} tidak didukung. Gunakan salah satu: {', '.join(valid_periods)}")
+                return
+            
+            await message.answer(f"🔄 Menjalankan backtest {strategy} untuk {pair_symbol.upper()}... Mohon tunggu sebentar.")
+            
+            # Run backtest
+            from core.backtester import Backtester
+            from datetime import datetime, timedelta
+            
+            backtester = Backtester()
+            
+            # Calculate dates based on period
+            end_date = datetime.now()
+            if period == "7d":
+                start_date = end_date - timedelta(days=7)
+            elif period == "30d":
+                start_date = end_date - timedelta(days=30)
+            elif period == "90d":
+                start_date = end_date - timedelta(days=90)
+            else:
+                start_date = end_date - timedelta(days=30)  # default
+            
+            results = await backtester.run_backtest(
+                pair_id=pair_id,
+                start_date=start_date,
+                end_date=end_date,
+                initial_balance=1000000,  # 1M IDR
+                strategy=strategy
+            )
+            
+            if results:
+                result_text = f"""
+📊 <b>Hasil Backtest</b>
+
+Strategy: {strategy.upper()}
+Period: {period}
+Pair: {pair_symbol.upper()}/IDR
+
+<b>Performance:</b>
+• Total Return: {results.total_return_percent:.2f}%
+• Sharpe Ratio: {results.sharpe_ratio:.2f}
+• Max Drawdown: {results.max_drawdown:.2f}%
+• Win Rate: {results.win_rate:.1f}%
+
+<b>Trades:</b>
+• Total Trades: {results.total_trades}
+• Profitable: {results.winning_trades}
+• Loss: {results.losing_trades}
+
+<b>Balance:</b>
+• Initial: {format_currency(results.initial_balance)} IDR
+• Final: {format_currency(results.final_balance)} IDR
+• Profit/Loss: {format_currency(results.total_return)} IDR
+
+⚠️ Past performance does not guarantee future results.
+"""
+                await message.answer(result_text)
+            else:
+                await message.answer("❌ Gagal menjalankan backtest. Silakan coba lagi nanti.")
+            
+        except Exception as e:
+            logger.error("Failed to handle backtest command", error=str(e))
+            await message.answer("❌ Terjadi kesalahan saat menjalankan backtest.")
+
+    async def _generate_ai_response(self, question: str, user) -> str:
+        """Generate AI response for user questions"""
+        try:
+            # This is a simplified AI assistant
+            # In production, you could integrate with OpenAI GPT or other LLM services
+            
+            question_lower = question.lower()
+            
+            # Trading basics
+            if any(word in question_lower for word in ['trading', 'cara trading', 'bagaimana trading']):
+                return """
+📚 <b>Dasar-dasar Trading Cryptocurrency</b>
+
+🔍 <b>Langkah-langkah Trading:</b>
+1. Riset dan analisis pasar
+2. Tentukan strategi (technical/fundamental)
+3. Kelola risiko (stop loss, position sizing)
+4. Eksekusi dengan disiplin
+5. Evaluasi dan perbaiki
+
+💡 <b>Tips Penting:</b>
+• Jangan investasi lebih dari yang bisa Anda rugi
+• Diversifikasi portfolio
+• Gunakan stop loss
+• Kontrol emosi saat trading
+
+🤖 Gunakan fitur signal AI bot ini untuk bantuan analisis!
+"""
+            
+            # DCA explanation
+            elif any(word in question_lower for word in ['dca', 'dollar cost averaging']):
+                return """
+💰 <b>Dollar Cost Averaging (DCA)</b>
+
+🎯 <b>DCA adalah strategi investasi:</b>
+• Membeli aset secara berkala dengan jumlah tetap
+• Tidak peduli harga naik atau turun
+• Mengurangi dampak volatilitas harga
+
+✅ <b>Keuntungan DCA:</b>
+• Mengurangi risiko timing yang buruk
+• Disiplin investasi jangka panjang
+• Cocok untuk pemula
+• Mengurangi stress trading
+
+📅 <b>Cara setting DCA di bot:</b>
+Gunakan menu /dca untuk mengatur
+
+💡 Bot ini mendukung DCA otomatis untuk BTC dan ETH!
+"""
+            
+            # Market analysis
+            elif any(word in question_lower for word in ['analisa', 'analysis', 'chart', 'pasar']):
+                return """
+📊 <b>Analisis Pasar Cryptocurrency</b>
+
+🔍 <b>Jenis Analisis:</b>
+
+📈 <b>Technical Analysis:</b>
+• Menggunakan chart dan indikator
+• RSI, MACD, Bollinger Bands
+• Support & Resistance levels
+• Volume analysis
+
+📰 <b>Fundamental Analysis:</b>
+• News dan perkembangan teknologi
+• Adopsi mainstream
+• Regulatory developments
+• Market sentiment
+
+🤖 <b>AI Analysis:</b>
+• Kombinasi technical + sentiment
+• Machine learning predictions
+• Real-time signal generation
+
+💡 Gunakan /signal untuk mendapat analisis AI terbaru!
+"""
+            
+            # When to buy/sell
+            elif any(word in question_lower for word in ['kapan buy', 'when buy', 'kapan beli', 'waktu buy']):
+                return """
+⏰ <b>Kapan Waktu yang Tepat untuk Buy?</b>
+
+🎯 <b>Indikator Buy Signal:</b>
+• RSI < 30 (oversold)
+• Price break above resistance
+• Volume spike dengan price increase
+• Positive news/sentiment
+• AI confidence > 70%
+
+📉 <b>Kondisi Market yang Baik:</b>
+• Market dalam uptrend
+• Support level yang kuat
+• Low volatility periods
+• After major corrections
+
+🤖 <b>Gunakan AI Bot:</b>
+• /signal untuk cek kondisi terkini
+• Set auto-trading untuk eksekusi otomatis
+• Monitor dengan portfolio tracker
+
+⚠️ <b>Ingat:</b> Tidak ada waktu yang "perfect" - selalu gunakan risk management!
+"""
+            
+            # Risk management
+            elif any(word in question_lower for word in ['risk', 'risiko', 'stop loss', 'risk management']):
+                return """
+🛡️ <b>Risk Management dalam Trading</b>
+
+📏 <b>Position Sizing:</b>
+• Maksimal 2-5% portfolio per trade
+• Diversifikasi di beberapa aset
+• Jangan all-in dalam satu trade
+
+🔴 <b>Stop Loss:</b>
+• Set maksimal 3-5% loss per trade
+• Gunakan technical levels sebagai guide
+• Stick to your plan!
+
+📊 <b>Portfolio Management:</b>
+• Maksimal 10-20% dalam crypto
+• Keep emergency fund
+• Regular profit taking
+
+⚙️ <b>Bot Features:</b>
+• Auto stop loss/take profit
+• Risk validation sebelum trade
+• Daily trade limits
+• Portfolio tracking
+
+💡 Gunakan /settings untuk atur risk parameters!
+"""
+            
+            # Bitcoin specific
+            elif any(word in question_lower for word in ['bitcoin', 'btc']):
+                return """
+₿ <b>Tentang Bitcoin (BTC)</b>
+
+🏆 <b>King of Crypto:</b>
+• First cryptocurrency (2009)
+• Store of value digital
+• Limited supply: 21 juta BTC
+• Proof of Work consensus
+
+📈 <b>Bitcoin sebagai Investment:</b>
+• Long-term appreciation potential
+• Hedge against inflation
+• Institutional adoption meningkat
+• Portfolio diversification
+
+🔍 <b>Trading BTC:</b>
+• High liquidity
+• 24/7 market
+• Volatility tinggi = opportunity
+• Korelasi dengan traditional markets
+
+🤖 <b>BTC di Bot ini:</b>
+• Real-time signals
+• Auto-trading support
+• DCA scheduling
+• Portfolio tracking
+
+💡 Gunakan /signal BTC untuk analisis terbaru!
+"""
+            
+            # General crypto question
+            elif any(word in question_lower for word in ['crypto', 'cryptocurrency']):
+                return """
+🚀 <b>Cryptocurrency Overview</b>
+
+💰 <b>Apa itu Cryptocurrency?</b>
+• Digital asset berbasis blockchain
+• Decentralized dan secure
+• Global payment system
+• Investment vehicle
+
+🔝 <b>Top Cryptocurrencies:</b>
+• Bitcoin (BTC) - Digital Gold
+• Ethereum (ETH) - Smart Contracts
+• USDT - Stablecoin
+• BNB, ADA, SOL, dll
+
+🎯 <b>Cara Mulai:</b>
+1. Pelajari basic concepts
+2. Pilih exchange terpercaya (Indodax)
+3. Start dengan amount kecil
+4. Gunakan tools seperti bot ini
+
+🤖 <b>Bot Features untuk Crypto:</b>
+• Multi-pair trading
+• AI-powered signals
+• Risk management
+• Portfolio analytics
+
+📚 Pelajari lebih lanjut dengan /help command!
+"""
+            
+            else:
+                # Default response for unrecognized questions
+                return f"""
+🤖 <b>AI Assistant</b>
+
+Pertanyaan Anda: "{question}"
+
+Maaf, saya belum bisa menjawab pertanyaan spesifik ini. Tapi saya bisa membantu dengan:
+
+📚 <b>Topics yang bisa ditanyakan:</b>
+• Cara trading cryptocurrency
+• Strategi DCA (Dollar Cost Averaging)
+• Analisis market dan chart
+• Kapan waktu buy/sell yang tepat
+• Risk management dan stop loss
+• Informasi Bitcoin dan crypto lainnya
+
+💡 <b>Contoh pertanyaan:</b>
+• "Apa itu DCA?"
+• "Bagaimana cara trading Bitcoin?"
+• "Kapan waktu yang tepat untuk buy?"
+
+🤖 Untuk analisis real-time, gunakan /signal
+📊 Untuk cek portfolio, gunakan /portfolio
+⚙️ Untuk pengaturan, gunakan /settings
+"""
+            
+        except Exception as e:
+            logger.error("Failed to generate AI response", error=str(e))
+            return "❌ Maaf, terjadi kesalahan dalam sistem AI. Silakan coba lagi nanti."

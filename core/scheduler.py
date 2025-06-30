@@ -9,7 +9,7 @@ import asyncio
 import structlog
 
 from core.indodax_api import indodax_api
-from core.database import get_db, PriceHistory, TradingPair
+from core.database import get_db, PriceHistory, TradingPair, User, Trade, UserSettings
 from ai.signal_generator import SignalGenerator
 from ai.sentiment_analyzer import SentimentAnalyzer
 
@@ -96,6 +96,24 @@ class TradingScheduler:
             max_instances=1
         )
         
+        # Process auto-trades based on AI signals every 30 minutes
+        self.scheduler.add_job(
+            self.process_auto_trades,
+            IntervalTrigger(minutes=30),
+            id="process_auto_trades",
+            max_instances=1,
+            coalesce=True
+        )
+        
+        # Monitor stop loss/take profit every 5 minutes
+        self.scheduler.add_job(
+            self.monitor_stop_loss_take_profit,
+            IntervalTrigger(minutes=5),
+            id="monitor_stop_loss_take_profit",
+            max_instances=1,
+            coalesce=True
+        )
+        
         logger.info("Scheduled jobs added successfully")
     
     async def update_price_data(self):
@@ -111,7 +129,7 @@ class TradingScheduler:
                 for pair in pairs:
                     try:
                         # Get current ticker data
-                        ticker_data = await indodax_api.get_ticker(pair.pair_id)
+                        ticker_data = await indodax_api.get_ticker(str(pair.pair_id))
                         
                         if "ticker" in ticker_data:
                             ticker = ticker_data["ticker"]
@@ -154,7 +172,7 @@ class TradingScheduler:
                 for pair in pairs:
                     try:
                         # Generate signal for this pair
-                        signal = await self.signal_generator.generate_signal(pair.pair_id)
+                        signal = await self.signal_generator.generate_signal(str(pair.pair_id))
                         
                         if signal:
                             logger.info("AI signal generated", 
@@ -242,13 +260,247 @@ class TradingScheduler:
         try:
             logger.info("Starting DCA trade processing")
             
-            # This will be implemented with user settings and auto-trading
-            # For now, just log the completion
+            # Import DCA manager to avoid circular imports
+            from core.dca_manager import DCAManager
+            
+            dca_manager = DCAManager()
+            await dca_manager.process_dca_trades()
             
             logger.info("DCA trade processing completed")
             
         except Exception as e:
             logger.error("Failed to process DCA trades", error=str(e))
+    
+    async def process_auto_trades(self):
+        """Process auto-trades based on AI signals"""
+        try:
+            logger.info("Starting auto-trade processing")
+            
+            # Import auto trader to avoid circular imports
+            from core.auto_trader import AutoTrader
+            
+            auto_trader = AutoTrader()
+            await auto_trader.process_auto_trades()
+            
+            logger.info("Auto-trade processing completed")
+            
+        except Exception as e:
+            logger.error("Failed to process auto-trades", error=str(e))
+    
+    async def update_price_history(self):
+        """Update price history data for all trading pairs"""
+        try:
+            logger.info("Starting price history update")
+            
+            db = get_db()
+            try:
+                # Get all active trading pairs
+                pairs = db.query(TradingPair).filter(TradingPair.is_active == True).all()
+                
+                for pair in pairs:
+                    try:
+                        # Get current ticker data
+                        ticker_pair = str(pair.pair_id).replace("_", "")
+                        ticker_data = await indodax_api.get_ticker(ticker_pair)
+                        
+                        if ticker_data and "ticker" in ticker_data:
+                            ticker_info = ticker_data["ticker"]
+                            
+                            # Create price history record
+                            price_record = PriceHistory(
+                                pair_id=pair.pair_id,
+                                timestamp=datetime.now(),
+                                open_price=float(ticker_info.get("last", 0)),
+                                high_price=float(ticker_info.get("high", 0)),
+                                low_price=float(ticker_info.get("low", 0)),
+                                close_price=float(ticker_info.get("last", 0)),
+                                volume=float(ticker_info.get("vol_idr", 0))
+                            )
+                            
+                            db.add(price_record)
+                            
+                        await asyncio.sleep(1)  # Rate limiting
+                        
+                    except Exception as e:
+                        logger.error("Failed to update price for pair", 
+                                   pair_id=pair.pair_id, error=str(e))
+                        continue
+                
+                db.commit()
+                logger.info("Price history update completed")
+                
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error("Failed to update price history", error=str(e))
+    
+    async def monitor_stop_loss_take_profit(self):
+        """Monitor and execute stop loss/take profit orders"""
+        try:
+            logger.info("Starting stop loss/take profit monitoring")
+            
+            db = get_db()
+            try:
+                # Get all pending trades with stop loss/take profit
+                pending_trades = db.query(Trade).filter(
+                    Trade.status == "pending"
+                ).all()
+                
+                for trade in pending_trades:
+                    try:
+                        # Get user settings
+                        user = db.query(User).filter(User.id == trade.user_id).first()
+                        if not user or not str(user.indodax_api_key):
+                            continue
+                        
+                        settings = db.query(UserSettings).filter(
+                            UserSettings.user_id == user.id
+                        ).first()
+                        
+                        if not settings:
+                            continue
+                        
+                        # Get current price
+                        ticker_pair = str(trade.pair_id).replace("_", "")
+                        ticker_data = await indodax_api.get_ticker(ticker_pair)
+                        
+                        if not ticker_data or "ticker" not in ticker_data:
+                            continue
+                        
+                        current_price = float(ticker_data["ticker"]["last"])
+                        entry_price = float(str(trade.price))
+                        
+                        # Check stop loss
+                        if str(trade.type) == "buy":
+                            stop_loss_price = entry_price * (1 - float(str(settings.stop_loss_percentage)) / 100)
+                            take_profit_price = entry_price * (1 + float(str(settings.take_profit_percentage)) / 100)
+                            
+                            if current_price <= stop_loss_price:
+                                await self._execute_stop_loss(user, trade, current_price)
+                            elif current_price >= take_profit_price:
+                                await self._execute_take_profit(user, trade, current_price)
+                        
+                        await asyncio.sleep(0.5)  # Rate limiting
+                        
+                    except Exception as e:
+                        logger.error("Failed to monitor trade", 
+                                   trade_id=trade.id, error=str(e))
+                        continue
+                
+                logger.info("Stop loss/take profit monitoring completed")
+                
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error("Failed to monitor stop loss/take profit", error=str(e))
+    
+    async def _execute_stop_loss(self, user: User, trade: Trade, current_price: float):
+        """Execute stop loss order"""
+        try:
+            # Import here to avoid circular imports
+            from bot.utils import decrypt_api_key
+            from core.indodax_api import IndodaxAPI
+            
+            api_key = decrypt_api_key(str(user.indodax_api_key))
+            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            user_api = IndodaxAPI(api_key, secret_key)
+            
+            # Execute sell order
+            result = await user_api.trade(
+                pair=str(trade.pair_id),
+                type="sell",
+                price=current_price,
+                coin_amount=float(str(trade.amount))
+            )
+            
+            if result.get("success") == 1:
+                # Update trade status
+                db = get_db()
+                try:
+                    # Update using SQLAlchemy update method
+                    db.query(Trade).filter(Trade.id == trade.id).update({
+                        Trade.status: "stop_loss_executed",
+                        Trade.completed_at: datetime.now()
+                    })
+                    db.commit()
+                    
+                    logger.info("Stop loss executed", 
+                               user_id=user.id, trade_id=trade.id, price=current_price)
+                    
+                    # Note: Telegram notification would be handled by main bot instance
+                    
+                finally:
+                    db.close()
+            
+        except Exception as e:
+            logger.error("Failed to execute stop loss", 
+                       user_id=user.id, trade_id=trade.id, error=str(e))
+    
+    async def _execute_take_profit(self, user: User, trade: Trade, current_price: float):
+        """Execute take profit order"""
+        try:
+            # Import here to avoid circular imports
+            from bot.utils import decrypt_api_key
+            from core.indodax_api import IndodaxAPI
+            
+            api_key = decrypt_api_key(str(user.indodax_api_key))
+            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            user_api = IndodaxAPI(api_key, secret_key)
+            
+            # Execute sell order
+            result = await user_api.trade(
+                pair=str(trade.pair_id),
+                type="sell",
+                price=current_price,
+                coin_amount=float(str(trade.amount))
+            )
+            
+            if result.get("success") == 1:
+                # Update trade status
+                db = get_db()
+                try:
+                    # Update using SQLAlchemy update method
+                    db.query(Trade).filter(Trade.id == trade.id).update({
+                        Trade.status: "take_profit_executed",
+                        Trade.completed_at: datetime.now()
+                    })
+                    db.commit()
+                    
+                    logger.info("Take profit executed", 
+                               user_id=user.id, trade_id=trade.id, price=current_price)
+                    
+                    # Note: Telegram notification would be handled by main bot instance
+                    
+                finally:
+                    db.close()
+            
+        except Exception as e:
+            logger.error("Failed to execute take profit", 
+                       user_id=user.id, trade_id=trade.id, error=str(e))
+    
+    async def _notify_stop_loss_executed(self, user: User, trade: Trade, price: float):
+        """Notify user about stop loss execution - handled by main bot instance"""
+        try:
+            # This functionality should be handled by the main bot instance
+            # when it receives notification about executed stop loss
+            logger.info("Stop loss notification needed", 
+                       user_id=user.id, trade_id=trade.id, price=price)
+            
+        except Exception as e:
+            logger.error("Failed to prepare stop loss notification", user_id=user.id, error=str(e))
+    
+    async def _notify_take_profit_executed(self, user: User, trade: Trade, price: float):
+        """Notify user about take profit execution - handled by main bot instance"""
+        try:
+            # This functionality should be handled by the main bot instance
+            # when it receives notification about executed take profit
+            logger.info("Take profit notification needed", 
+                       user_id=user.id, trade_id=trade.id, price=price)
+            
+        except Exception as e:
+            logger.error("Failed to prepare take profit notification", user_id=user.id, error=str(e))
 
 def init_scheduler() -> TradingScheduler:
     """Initialize and return the trading scheduler"""

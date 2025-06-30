@@ -38,6 +38,7 @@ class User(Base):
     auto_trading_enabled = Column(Boolean, default=False)
     risk_level = Column(String, default="medium")  # low, medium, high
     max_trade_amount = Column(Float, default=100000.0)
+    auto_trade_amount = Column(Float, default=100000.0)  # Add missing column
 
 class TradingPair(Base):
     """Trading pairs available on Indodax"""
@@ -153,6 +154,8 @@ async def init_database():
 
 def get_db() -> Session:
     """Get database session"""
+    if not SessionLocal:
+        raise RuntimeError("Database not initialized. Call init_database() first.")
     db = SessionLocal()
     try:
         return db
