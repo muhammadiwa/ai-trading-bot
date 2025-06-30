@@ -130,8 +130,8 @@ class RiskManager:
             
             # Get user balance
             from bot.utils import decrypt_api_key
-            api_key = decrypt_api_key(user.indodax_api_key)
-            secret_key = decrypt_api_key(user.indodax_secret_key)
+            api_key = decrypt_api_key(str(user.indodax_api_key))
+            secret_key = decrypt_api_key(str(user.indodax_secret_key))
             
             user_api = indodax_api.__class__(api_key, secret_key)
             balance_data = await user_api.get_balance()
@@ -205,8 +205,8 @@ class RiskManager:
         """Get total portfolio value in IDR"""
         try:
             from bot.utils import decrypt_api_key
-            api_key = decrypt_api_key(user.indodax_api_key)
-            secret_key = decrypt_api_key(user.indodax_secret_key)
+            api_key = decrypt_api_key(str(user.indodax_api_key))
+            secret_key = decrypt_api_key(str(user.indodax_secret_key))
             
             user_api = indodax_api.__class__(api_key, secret_key)
             balance_data = await user_api.get_balance()

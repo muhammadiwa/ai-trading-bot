@@ -24,8 +24,8 @@ class PortfolioManager:
             logger.info("Updating portfolio", user_id=user.id)
             
             # Get balance from Indodax
-            api_key = decrypt_api_key(user.indodax_api_key)
-            secret_key = decrypt_api_key(user.indodax_secret_key)
+            api_key = decrypt_api_key(str(user.indodax_api_key))
+            secret_key = decrypt_api_key(str(user.indodax_secret_key))
             
             user_api = indodax_api.__class__(api_key, secret_key)
             info_data = await user_api.get_info()
