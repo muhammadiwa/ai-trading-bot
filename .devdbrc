@@ -1,0 +1,6 @@
+[
+  {
+    "type": "sqlite",
+    "path": "d:\\Project\\crypto-ai\\data\\trading_bot_demo.db"
+  }
+]
