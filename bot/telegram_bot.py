@@ -1903,9 +1903,19 @@ Gunakan: <code>/backtest [pair] [strategy] [period]</code>
             
             await message.answer(f"🔄 Menjalankan backtest {strategy} untuk {pair_symbol.upper()}... Mohon tunggu sebentar.")
             
-            # Run backtest
+            # Run backtest with improved AI/ML capabilities
             from core.backtester import Backtester
             from datetime import datetime, timedelta
+            import asyncio
+            
+            # Show loading message to improve UX
+            status_message = await message.answer(
+                "🔄 <b>Memproses backtest</b>\n\n"
+                f"<b>Pair:</b> {pair_symbol.upper()}/IDR\n"
+                f"<b>Strategy:</b> {strategy}\n"
+                f"<b>Period:</b> {period}\n\n"
+                "⏳ Mengumpulkan data historis..."
+            )
             
             backtester = Backtester()
             
@@ -1919,25 +1929,130 @@ Gunakan: <code>/backtest [pair] [strategy] [period]</code>
                 start_date = end_date - timedelta(days=90)
             else:
                 start_date = end_date - timedelta(days=30)  # default
+                
+            # Update status
+            await status_message.edit_text(
+                "🔄 <b>Memproses backtest</b>\n\n"
+                f"<b>Pair:</b> {pair_symbol.upper()}/IDR\n"
+                f"<b>Strategy:</b> {strategy}\n"
+                f"<b>Period:</b> {period}\n\n"
+                "⏳ Menjalankan simulasi trading..."
+            )
             
+            # Set confidence threshold based on strategy
+            confidence_threshold = 0.6
+            if strategy == "ai_signals":
+                confidence_threshold = 0.65
+            elif strategy == "lstm_prediction":
+                confidence_threshold = 0.7
+                
+            # Run the backtest with appropriate parameters
             results = await backtester.run_backtest(
                 pair_id=pair_id,
                 start_date=start_date,
                 end_date=end_date,
                 initial_balance=1000000,  # 1M IDR
-                strategy=strategy
+                strategy=strategy,
+                min_confidence=confidence_threshold
             )
             
             if results:
+                # Update status while generating report
+                await status_message.edit_text(
+                    "🔄 <b>Memproses backtest</b>\n\n"
+                    f"<b>Pair:</b> {pair_symbol.upper()}/IDR\n"
+                    f"<b>Strategy:</b> {strategy}\n"
+                    f"<b>Period:</b> {period}\n\n"
+                    "⏳ Menghasilkan laporan dan visualisasi..."
+                )
+                
+                # Generate performance chart if matplotlib is available
+                chart_path = None
+                try:
+                    import matplotlib.pyplot as plt
+                    import matplotlib.dates as mdates
+                    import io
+                    from aiogram.types import FSInputFile
+                    import os
+                    
+                    # Create equity curve chart
+                    plt.figure(figsize=(10, 6))
+                    
+                    # Extract data from equity curve
+                    dates = [point['date'] for point in results.equity_curve]
+                    equity = [point['equity'] for point in results.equity_curve]
+                    
+                    # Plot equity curve
+                    plt.plot(dates, equity, label='Equity', color='blue', linewidth=2)
+                    
+                    # Plot initial balance as horizontal line
+                    plt.axhline(y=results.initial_balance, color='green', linestyle='--', label='Initial Balance')
+                    
+                    # Add buy/sell markers from trades
+                    for trade in results.trades:
+                        if trade['type'] == 'buy':
+                            plt.scatter(trade['date'], trade['amount'], color='green', marker='^', s=100)
+                        elif trade['type'] == 'sell':
+                            plt.scatter(trade['date'], trade['amount'], color='red', marker='v', s=100)
+                    
+                    # Format chart
+                    plt.title(f'{pair_symbol.upper()}/IDR {strategy.upper()} Backtest ({period})')
+                    plt.xlabel('Date')
+                    plt.ylabel('Balance (IDR)')
+                    plt.grid(True, linestyle='--', alpha=0.7)
+                    plt.legend()
+                    
+                    # Format x-axis dates
+                    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
+                    plt.xticks(rotation=45)
+                    
+                    # Save chart to temporary file
+                    chart_path = f"temp_backtest_{user.id}_{int(datetime.now().timestamp())}.png"
+                    plt.tight_layout()
+                    plt.savefig(chart_path)
+                    plt.close()
+                    
+                except Exception as e:
+                    logger.error("Failed to generate backtest chart", error=str(e))
+                    chart_path = None
+                
+                # Generate strategy-specific insights
+                strategy_insights = ""
+                if strategy == "ai_signals":
+                    # Extract confidence scores and accuracy from trades
+                    if results.trades:
+                        avg_confidence = sum(trade.get('confidence', 0) for trade in results.trades if 'confidence' in trade) / len(results.trades)
+                        profitable_signals = len([t for t in results.trades if t.get('pnl', 0) > 0 and t.get('confidence', 0) > 0.7])
+                        high_conf_signals = len([t for t in results.trades if t.get('confidence', 0) > 0.7])
+                        high_conf_accuracy = profitable_signals / high_conf_signals if high_conf_signals > 0 else 0
+                        
+                        strategy_insights = f"""
+<b>AI Signal Insights:</b>
+• Average Confidence: {avg_confidence:.2f}
+• High Confidence Signal Accuracy: {high_conf_accuracy*100:.1f}%
+• Best Performing Indicator: {self._get_best_indicator(results.trades)}
+"""
+                elif strategy == "lstm_prediction":
+                    if results.trades:
+                        avg_prediction = sum(abs(trade.get('predicted_change', 0)) for trade in results.trades if 'predicted_change' in trade) / len(results.trades)
+                        
+                        strategy_insights = f"""
+<b>LSTM Model Insights:</b>
+• Avg Predicted Change: {avg_prediction*100:.2f}%
+• Prediction Accuracy: {results.win_rate:.1f}%
+• Best Prediction Horizon: {self._get_best_prediction_horizon(results.trades)}
+"""
+                
+                # Format main result text
                 result_text = f"""
 📊 <b>Hasil Backtest</b>
 
-Strategy: {strategy.upper()}
-Period: {period}
-Pair: {pair_symbol.upper()}/IDR
+<b>Strategy:</b> {strategy.upper()}
+<b>Period:</b> {period}
+<b>Pair:</b> {pair_symbol.upper()}/IDR
 
 <b>Performance:</b>
-• Total Return: {results.total_return_percent:.2f}%
+• Total Return: <b>{results.total_return_percent:.2f}%</b>
 • Sharpe Ratio: {results.sharpe_ratio:.2f}
 • Max Drawdown: {results.max_drawdown:.2f}%
 • Win Rate: {results.win_rate:.1f}%
@@ -1949,243 +2064,196 @@ Pair: {pair_symbol.upper()}/IDR
 
 <b>Balance:</b>
 • Initial: {format_currency(results.initial_balance)} IDR
-• Final: {format_currency(results.final_balance)} IDR
+• Final: <b>{format_currency(results.final_balance)} IDR</b>
 • Profit/Loss: {format_currency(results.total_return)} IDR
-
-⚠️ Past performance does not guarantee future results.
+{strategy_insights}
+⚠️ <i>Past performance does not guarantee future results.</i>
 """
-                await message.answer(result_text)
+                # Send chart if available
+                if chart_path and os.path.exists(chart_path):
+                    await self.bot.send_photo(
+                        message.chat.id,
+                        FSInputFile(chart_path),
+                        caption=result_text,
+                    )
+                    # Clean up
+                    try:
+                        os.remove(chart_path)
+                    except:
+                        pass
+                else:
+                    await status_message.delete()
+                    await message.answer(result_text)
+                    
+                # Store backtest result in user session data
+                backtest_data = {
+                    "pair": pair_symbol,
+                    "strategy": strategy,
+                    "period": period,
+                    "return": results.total_return_percent,
+                    "timestamp": datetime.now().timestamp()
+                }
+                
+                # Create trade button if result is profitable
+                if results.total_return_percent > 0:
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(
+                            text="🔄 Run Another Backtest",
+                            callback_data=f"backtest_new"
+                        ),
+                        InlineKeyboardButton(
+                            text="💹 Apply Strategy",
+                            callback_data=f"backtest_apply_{pair_id}_{strategy}"
+                        )
+                    ]])
+                    
+                    await message.answer(
+                        f"🤖 <b>AI Recommendation</b>\n\n"
+                        f"Strategi {strategy} menunjukkan hasil positif untuk {pair_symbol.upper()}.\n"
+                        f"Anda dapat menerapkan strategi ini untuk trading otomatis.",
+                        reply_markup=keyboard
+                    )
             else:
+                await status_message.delete()
                 await message.answer("❌ Gagal menjalankan backtest. Silakan coba lagi nanti.")
             
         except Exception as e:
             logger.error("Failed to handle backtest command", error=str(e))
             await message.answer("❌ Terjadi kesalahan saat menjalankan backtest.")
 
-    async def _generate_ai_response(self, question: str, user) -> str:
-        """Generate AI response for user questions"""
-        try:
-            # This is a simplified AI assistant
-            # In production, you could integrate with OpenAI GPT or other LLM services
+    def _get_best_indicator(self, trades):
+        """Analyze trades to find which technical indicator performed best"""
+        if not trades:
+            return "RSI"
             
-            question_lower = question.lower()
+        # Count profitable trades by indicator
+        indicator_performance = {
+            "RSI": 0,
+            "MACD": 0,
+            "Moving Averages": 0,
+            "Bollinger Bands": 0,
+            "Volume": 0
+        }
+        
+        indicator_usage = {k: 0 for k in indicator_performance.keys()}
+        
+        for trade in trades:
+            # Skip trades without indicators data
+            if 'indicators' not in trade:
+                continue
+                
+            indicators = trade.get('indicators', {})
+            is_profitable = trade.get('pnl', 0) > 0
             
-            # Trading basics
-            if any(word in question_lower for word in ['trading', 'cara trading', 'bagaimana trading']):
-                return """
-📚 <b>Dasar-dasar Trading Cryptocurrency</b>
-
-🔍 <b>Langkah-langkah Trading:</b>
-1. Riset dan analisis pasar
-2. Tentukan strategi (technical/fundamental)
-3. Kelola risiko (stop loss, position sizing)
-4. Eksekusi dengan disiplin
-5. Evaluasi dan perbaiki
-
-💡 <b>Tips Penting:</b>
-• Jangan investasi lebih dari yang bisa Anda rugi
-• Diversifikasi portfolio
-• Gunakan stop loss
-• Kontrol emosi saat trading
-
-🤖 Gunakan fitur signal AI bot ini untuk bantuan analisis!
-"""
+            # Check which indicators likely triggered this trade
+            if 'rsi' in indicators:
+                rsi = indicators['rsi']
+                if (rsi < 30 and trade['type'] == 'buy') or (rsi > 70 and trade['type'] == 'sell'):
+                    indicator_usage["RSI"] += 1
+                    if is_profitable:
+                        indicator_performance["RSI"] += 1
             
-            # DCA explanation
-            elif any(word in question_lower for word in ['dca', 'dollar cost averaging']):
-                return """
-💰 <b>Dollar Cost Averaging (DCA)</b>
-
-🎯 <b>DCA adalah strategi investasi:</b>
-• Membeli aset secara berkala dengan jumlah tetap
-• Tidak peduli harga naik atau turun
-• Mengurangi dampak volatilitas harga
-
-✅ <b>Keuntungan DCA:</b>
-• Mengurangi risiko timing yang buruk
-• Disiplin investasi jangka panjang
-• Cocok untuk pemula
-• Mengurangi stress trading
-
-📅 <b>Cara setting DCA di bot:</b>
-Gunakan menu /dca untuk mengatur
-
-💡 Bot ini mendukung DCA otomatis untuk BTC dan ETH!
-"""
+            if 'macd' in indicators and 'macd_signal' in indicators:
+                macd = indicators['macd']
+                macd_signal = indicators['macd_signal']
+                if (macd > macd_signal and trade['type'] == 'buy') or (macd < macd_signal and trade['type'] == 'sell'):
+                    indicator_usage["MACD"] += 1
+                    if is_profitable:
+                        indicator_performance["MACD"] += 1
             
-            # Market analysis
-            elif any(word in question_lower for word in ['analisa', 'analysis', 'chart', 'pasar']):
-                return """
-📊 <b>Analisis Pasar Cryptocurrency</b>
-
-🔍 <b>Jenis Analisis:</b>
-
-📈 <b>Technical Analysis:</b>
-• Menggunakan chart dan indikator
-• RSI, MACD, Bollinger Bands
-• Support & Resistance levels
-• Volume analysis
-
-📰 <b>Fundamental Analysis:</b>
-• News dan perkembangan teknologi
-• Adopsi mainstream
-• Regulatory developments
-• Market sentiment
-
-🤖 <b>AI Analysis:</b>
-• Kombinasi technical + sentiment
-• Machine learning predictions
-• Real-time signal generation
-
-💡 Gunakan /signal untuk mendapat analisis AI terbaru!
-"""
+            if 'sma_10' in indicators and 'sma_20' in indicators:
+                sma_10 = indicators['sma_10']
+                sma_20 = indicators['sma_20']
+                if (sma_10 > sma_20 and trade['type'] == 'buy') or (sma_10 < sma_20 and trade['type'] == 'sell'):
+                    indicator_usage["Moving Averages"] += 1
+                    if is_profitable:
+                        indicator_performance["Moving Averages"] += 1
             
-            # When to buy/sell
-            elif any(word in question_lower for word in ['kapan buy', 'when buy', 'kapan beli', 'waktu buy']):
-                return """
-⏰ <b>Kapan Waktu yang Tepat untuk Buy?</b>
-
-🎯 <b>Indikator Buy Signal:</b>
-• RSI < 30 (oversold)
-• Price break above resistance
-• Volume spike dengan price increase
-• Positive news/sentiment
-• AI confidence > 70%
-
-📉 <b>Kondisi Market yang Baik:</b>
-• Market dalam uptrend
-• Support level yang kuat
-• Low volatility periods
-• After major corrections
-
-🤖 <b>Gunakan AI Bot:</b>
-• /signal untuk cek kondisi terkini
-• Set auto-trading untuk eksekusi otomatis
-• Monitor dengan portfolio tracker
-
-⚠️ <b>Ingat:</b> Tidak ada waktu yang "perfect" - selalu gunakan risk management!
-"""
+            if 'bb_upper' in indicators and 'bb_lower' in indicators:
+                bb_upper = indicators['bb_upper']
+                bb_lower = indicators['bb_lower']
+                price = trade.get('price', 0)
+                if (price < bb_lower and trade['type'] == 'buy') or (price > bb_upper and trade['type'] == 'sell'):
+                    indicator_usage["Bollinger Bands"] += 1
+                    if is_profitable:
+                        indicator_performance["Bollinger Bands"] += 1
             
-            # Risk management
-            elif any(word in question_lower for word in ['risk', 'risiko', 'stop loss', 'risk management']):
-                return """
-🛡️ <b>Risk Management dalam Trading</b>
-
-📏 <b>Position Sizing:</b>
-• Maksimal 2-5% portfolio per trade
-• Diversifikasi di beberapa aset
-• Jangan all-in dalam satu trade
-
-🔴 <b>Stop Loss:</b>
-• Set maksimal 3-5% loss per trade
-• Gunakan technical levels sebagai guide
-• Stick to your plan!
-
-📊 <b>Portfolio Management:</b>
-• Maksimal 10-20% dalam crypto
-• Keep emergency fund
-• Regular profit taking
-
-⚙️ <b>Bot Features:</b>
-• Auto stop loss/take profit
-• Risk validation sebelum trade
-• Daily trade limits
-• Portfolio tracking
-
-💡 Gunakan /settings untuk atur risk parameters!
-"""
-            
-            # Bitcoin specific
-            elif any(word in question_lower for word in ['bitcoin', 'btc']):
-                return """
-₿ <b>Tentang Bitcoin (BTC)</b>
-
-🏆 <b>King of Crypto:</b>
-• First cryptocurrency (2009)
-• Store of value digital
-• Limited supply: 21 juta BTC
-• Proof of Work consensus
-
-📈 <b>Bitcoin sebagai Investment:</b>
-• Long-term appreciation potential
-• Hedge against inflation
-• Institutional adoption meningkat
-• Portfolio diversification
-
-🔍 <b>Trading BTC:</b>
-• High liquidity
-• 24/7 market
-• Volatility tinggi = opportunity
-• Korelasi dengan traditional markets
-
-🤖 <b>BTC di Bot ini:</b>
-• Real-time signals
-• Auto-trading support
-• DCA scheduling
-• Portfolio tracking
-
-💡 Gunakan /signal BTC untuk analisis terbaru!
-"""
-            
-            # General crypto question
-            elif any(word in question_lower for word in ['crypto', 'cryptocurrency']):
-                return """
-🚀 <b>Cryptocurrency Overview</b>
-
-💰 <b>Apa itu Cryptocurrency?</b>
-• Digital asset berbasis blockchain
-• Decentralized dan secure
-• Global payment system
-• Investment vehicle
-
-🔝 <b>Top Cryptocurrencies:</b>
-• Bitcoin (BTC) - Digital Gold
-• Ethereum (ETH) - Smart Contracts
-• USDT - Stablecoin
-• BNB, ADA, SOL, dll
-
-🎯 <b>Cara Mulai:</b>
-1. Pelajari basic concepts
-2. Pilih exchange terpercaya (Indodax)
-3. Start dengan amount kecil
-4. Gunakan tools seperti bot ini
-
-🤖 <b>Bot Features untuk Crypto:</b>
-• Multi-pair trading
-• AI-powered signals
-• Risk management
-• Portfolio analytics
-
-📚 Pelajari lebih lanjut dengan /help command!
-"""
-            
+            if 'volume_ratio' in indicators:
+                volume_ratio = indicators['volume_ratio']
+                if volume_ratio > 1.2:
+                    indicator_usage["Volume"] += 1
+                    if is_profitable:
+                        indicator_performance["Volume"] += 1
+        
+        # Calculate success rate for each indicator
+        success_rates = {}
+        for indicator, wins in indicator_performance.items():
+            if indicator_usage[indicator] > 0:
+                success_rates[indicator] = wins / indicator_usage[indicator]
             else:
-                # Default response for unrecognized questions
-                return f"""
-🤖 <b>AI Assistant</b>
-
-Pertanyaan Anda: "{question}"
-
-Maaf, saya belum bisa menjawab pertanyaan spesifik ini. Tapi saya bisa membantu dengan:
-
-📚 <b>Topics yang bisa ditanyakan:</b>
-• Cara trading cryptocurrency
-• Strategi DCA (Dollar Cost Averaging)
-• Analisis market dan chart
-• Kapan waktu buy/sell yang tepat
-• Risk management dan stop loss
-• Informasi Bitcoin dan crypto lainnya
-
-💡 <b>Contoh pertanyaan:</b>
-• "Apa itu DCA?"
-• "Bagaimana cara trading Bitcoin?"
-• "Kapan waktu yang tepat untuk buy?"
-
-🤖 Untuk analisis real-time, gunakan /signal
-📊 Untuk cek portfolio, gunakan /portfolio
-⚙️ Untuk pengaturan, gunakan /settings
-"""
+                success_rates[indicator] = 0
+        
+        # Find indicator with highest success rate
+        best_indicator = max(success_rates.items(), key=lambda x: x[1]) if success_rates else ("RSI", 0)
+        
+        return best_indicator[0]
+    
+    def _get_best_prediction_horizon(self, trades):
+        """Analyze LSTM trades to find which prediction horizon worked best"""
+        if not trades:
+            return "1-3 days"
             
-        except Exception as e:
-            logger.error("Failed to generate AI response", error=str(e))
-            return "❌ Maaf, terjadi kesalahan dalam sistem AI. Silakan coba lagi nanti."
+        # Count successful predictions at different horizons
+        horizons = {
+            "1-3 days": {"correct": 0, "total": 0},
+            "4-7 days": {"correct": 0, "total": 0},
+            "8+ days": {"correct": 0, "total": 0}
+        }
+        
+        for i in range(len(trades) - 1):
+            current_trade = trades[i]
+            
+            # Skip if not buy trade
+            if current_trade['type'] != 'buy':
+                continue
+            
+            # Find corresponding sell trade
+            sell_trade = None
+            for j in range(i+1, len(trades)):
+                if trades[j]['type'] == 'sell':
+                    sell_trade = trades[j]
+                    break
+            
+            if not sell_trade:
+                continue
+                
+            # Calculate days between trades
+            buy_date = current_trade['date']
+            sell_date = sell_trade['date']
+            days_held = (sell_date - buy_date).days
+            
+            # Determine horizon category
+            if days_held <= 3:
+                horizon = "1-3 days"
+            elif days_held <= 7:
+                horizon = "4-7 days"
+            else:
+                horizon = "8+ days"
+                
+            # Track performance
+            horizons[horizon]["total"] += 1
+            if sell_trade.get('pnl', 0) > 0:
+                horizons[horizon]["correct"] += 1
+        
+        # Find best horizon
+        best_horizon = "1-3 days"  # default
+        best_accuracy = 0
+        
+        for horizon, stats in horizons.items():
+            if stats["total"] > 0:
+                accuracy = stats["correct"] / stats["total"]
+                if accuracy > best_accuracy:
+                    best_accuracy = accuracy
+                    best_horizon = horizon
+        
+        return best_horizon
