@@ -172,14 +172,14 @@ class TelegramBot:
                 
                 if user:
                     # Update user info if changed
-                    if (user.username != telegram_user.username or 
-                        user.first_name != telegram_user.first_name or
-                        user.last_name != telegram_user.last_name):
+                    if (getattr(user, 'username') != telegram_user.username or 
+                        getattr(user, 'first_name') != telegram_user.first_name or
+                        getattr(user, 'last_name') != telegram_user.last_name):
                         
-                        user.username = telegram_user.username
-                        user.first_name = telegram_user.first_name
-                        user.last_name = telegram_user.last_name
-                        user.updated_at = datetime.utcnow()
+                        setattr(user, 'username', telegram_user.username)
+                        setattr(user, 'first_name', telegram_user.first_name)
+                        setattr(user, 'last_name', telegram_user.last_name)
+                        setattr(user, 'updated_at', datetime.utcnow())
                         db.commit()
                     
                     return user
@@ -217,8 +217,8 @@ class TelegramBot:
         try:
             user = await self._get_or_create_user(message.from_user)
             
-            welcome_text = self.messages.get_welcome_message(user.language)
-            keyboard = create_main_keyboard(user.language)
+            welcome_text = self.messages.get_welcome_message(getattr(user, 'language', 'id'))
+            keyboard = create_main_keyboard(getattr(user, 'language', 'id'))
             
             await message.answer(welcome_text, reply_markup=keyboard)
             
@@ -230,7 +230,7 @@ class TelegramBot:
         """Handle /help command"""
         try:
             user = await self._get_or_create_user(message.from_user)
-            help_text = self.messages.get_help_message(user.language)
+            help_text = self.messages.get_help_message(getattr(user, 'language', 'id'))
             
             await message.answer(help_text)
             
@@ -243,11 +243,11 @@ class TelegramBot:
         try:
             user = await self._get_or_create_user(message.from_user)
             
-            if user.indodax_api_key:
+            if getattr(user, 'indodax_api_key', None):
                 await message.answer("✅ Anda sudah terdaftar dan terkoneksi dengan Indodax!")
                 return
             
-            register_text = self.messages.get_registration_message(user.language)
+            register_text = self.messages.get_registration_message(getattr(user, 'language', 'id'))
             await message.answer(register_text)
             
             await state.set_state(RegistrationStates.waiting_for_api_key)
@@ -261,13 +261,13 @@ class TelegramBot:
         try:
             user = await self._get_or_create_user(message.from_user)
             
-            if not user.indodax_api_key:
+            if not getattr(user, 'indodax_api_key', None):
                 await message.answer("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
                 return
             
             # Get portfolio data
             portfolio_data = await self._get_portfolio_data(user)
-            portfolio_text = self.messages.format_portfolio(portfolio_data, user.language)
+            portfolio_text = self.messages.format_portfolio(portfolio_data, getattr(user, 'language', 'id'))
             
             await message.answer(portfolio_text)
             
@@ -280,20 +280,20 @@ class TelegramBot:
         try:
             user = await self._get_or_create_user(message.from_user)
             
-            if not user.indodax_api_key:
+            if not getattr(user, 'indodax_api_key', None):
                 await message.answer("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
                 return
             
             # Get balance from Indodax
-            api_key = decrypt_api_key(str(user.indodax_api_key))
-            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            api_key = decrypt_api_key(str(getattr(user, 'indodax_api_key', '')))
+            secret_key = decrypt_api_key(str(getattr(user, 'indodax_secret_key', '')))
             
             user_api = IndodaxAPI(api_key, secret_key)
             balance_data = await user_api.get_balance()
             
             logger.info("Balance data received", balance_data=balance_data, data_type=type(balance_data))
             
-            balance_text = self.messages.format_balance(balance_data, user.language)
+            balance_text = self.messages.format_balance(balance_data, getattr(user, 'language', 'id'))
             await message.answer(balance_text)
             
         except Exception as e:
@@ -306,6 +306,10 @@ class TelegramBot:
             user = await self._get_or_create_user(message.from_user)
             
             # Parse command for specific pair
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid.")
+                return
+                
             command_parts = message.text.split()
             pair_id = "btc_idr"  # default
             
@@ -317,7 +321,7 @@ class TelegramBot:
             signal = await self.signal_generator.generate_signal(pair_id)
             
             if signal:
-                signal_text = self.messages.format_signal(signal, user.language)
+                signal_text = self.messages.format_signal(signal, getattr(user, 'language', 'id'))
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(
                         text="🔄 Update Signal",
@@ -325,7 +329,7 @@ class TelegramBot:
                     ),
                     InlineKeyboardButton(
                         text="💹 Trade",
-                        callback_data=f"trade_{pair_id}_{signal.signal_type}"
+                        callback_data=f"trade_{pair_id}_{getattr(signal, 'signal_type', 'buy')}"
                     )
                 ]])
                 
@@ -350,8 +354,13 @@ class TelegramBot:
         try:
             user = await self._get_or_create_user(message.from_user)
             
-            if not user.indodax_api_key:
+            if not getattr(user, 'indodax_api_key', None):
                 await message.answer("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+                return
+            
+            # Check if message.text is available
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid.")
                 return
             
             # Parse command arguments
@@ -366,8 +375,8 @@ class TelegramBot:
                 await self._execute_trade(message, user, pair_id, trade_type, amount)
             else:
                 # Interactive trade selection
-                keyboard = create_trading_keyboard(trade_type, user.language)
-                trade_text = self.messages.get_trade_selection_message(trade_type, user.language)
+                keyboard = create_trading_keyboard(trade_type, getattr(user, 'language', 'id'))
+                trade_text = self.messages.get_trade_selection_message(trade_type, getattr(user, 'language', 'id'))
                 
                 await message.answer(trade_text, reply_markup=keyboard)
                 await state.set_state(TradingStates.selecting_pair)
@@ -384,18 +393,18 @@ class TelegramBot:
         try:
             user = await self._get_or_create_user(message.from_user)
             
-            if not user.indodax_api_key:
+            if not getattr(user, 'indodax_api_key', None):
                 await message.answer("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
                 return
             
             # Get open orders
-            api_key = decrypt_api_key(str(user.indodax_api_key))
-            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            api_key = decrypt_api_key(str(getattr(user, 'indodax_api_key', '')))
+            secret_key = decrypt_api_key(str(getattr(user, 'indodax_secret_key', '')))
             
             user_api = IndodaxAPI(api_key, secret_key)
             orders_data = await user_api.get_open_orders()
             
-            orders_text = self.messages.format_orders(orders_data, user.language)
+            orders_text = self.messages.format_orders(orders_data, getattr(user, 'language', 'id'))
             await message.answer(orders_text)
             
         except Exception as e:
@@ -406,8 +415,8 @@ class TelegramBot:
         """Handle /settings command"""
         try:
             user = await self._get_or_create_user(message.from_user)
-            settings_keyboard = create_settings_keyboard(user.language)
-            settings_text = self.messages.get_settings_message(user.language)
+            settings_keyboard = create_settings_keyboard(getattr(user, 'language', 'id'))
+            settings_text = self.messages.get_settings_message(getattr(user, 'language', 'id'))
             
             await message.answer(settings_text, reply_markup=settings_keyboard)
             
@@ -434,7 +443,7 @@ class TelegramBot:
     
     async def cmd_admin(self, message: Message):
         """Handle /admin command"""
-        if not is_admin_user(message.from_user.id):
+        if not message.from_user or not is_admin_user(message.from_user.id):
             await message.answer("❌ Anda tidak memiliki akses admin.")
             return
         
@@ -452,7 +461,11 @@ class TelegramBot:
     
     async def cmd_broadcast(self, message: Message):
         """Handle /broadcast command"""
-        if not is_admin_user(message.from_user.id):
+        if not message.from_user or not is_admin_user(message.from_user.id):
+            return
+        
+        if not message.text:
+            await message.answer("❌ Pesan tidak valid.")
             return
         
         command_parts = message.text.split(" ", 1)
@@ -465,7 +478,7 @@ class TelegramBot:
     
     async def cmd_stats(self, message: Message):
         """Handle /stats command"""
-        if not is_admin_user(message.from_user.id):
+        if not message.from_user or not is_admin_user(message.from_user.id):
             return
         
         try:
@@ -483,6 +496,10 @@ class TelegramBot:
     async def process_api_key(self, message: Message, state: FSMContext):
         """Process API key input during registration"""
         try:
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid. Silakan masukkan API key yang benar.")
+                return
+                
             api_key = message.text.strip()
             
             # Basic validation
@@ -502,6 +519,10 @@ class TelegramBot:
     async def process_secret_key(self, message: Message, state: FSMContext):
         """Process secret key input during registration"""
         try:
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid. Silakan masukkan secret key yang benar.")
+                return
+                
             secret_key = message.text.strip()
             
             # Basic validation
@@ -524,18 +545,24 @@ class TelegramBot:
                 if result and result.get("success") == 1:
                     # Save encrypted credentials
                     user = await self._get_or_create_user(message.from_user)
-                    user.indodax_api_key = encrypt_api_key(api_key)
-                    user.indodax_secret_key = encrypt_api_key(secret_key)
                     
-                    db = get_db()
-                    try:
-                        db.merge(user)
-                        db.commit()
-                    finally:
-                        db.close()
-                    
-                    await state.clear()
-                    await message.answer("✅ Pendaftaran berhasil! Akun Anda telah terhubung dengan Indodax.")
+                    # Ensure api_key and secret_key are not None
+                    if api_key and secret_key:
+                        setattr(user, 'indodax_api_key', encrypt_api_key(api_key))
+                        setattr(user, 'indodax_secret_key', encrypt_api_key(secret_key))
+                        
+                        db = get_db()
+                        try:
+                            db.merge(user)
+                            db.commit()
+                        finally:
+                            db.close()
+                        
+                        await state.clear()
+                        await message.answer("✅ Pendaftaran berhasil! Akun Anda telah terhubung dengan Indodax.")
+                    else:
+                        await message.answer("❌ API key atau secret key tidak valid.")
+                        await state.clear()
                 else:
                     error_msg = result.get("error", "Unknown error") if result else "API call failed"
                     logger.error("API validation failed", error=error_msg)
@@ -557,6 +584,10 @@ class TelegramBot:
     async def callback_trade(self, callback: CallbackQuery, state: FSMContext):
         """Handle trading callbacks"""
         try:
+            if not callback.data:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             data_parts = callback.data.split("_")
             action = data_parts[1]  # trade action
             
@@ -569,7 +600,7 @@ class TelegramBot:
                     await self._show_buy_amount_selection(callback.message, user, pair_id, state)
                 else:
                     # For sell, show different options
-                    await callback.message.answer(f"💰 Masukkan jumlah {pair_id.split('_')[0].upper()} untuk jual:")
+                    await self._safe_edit_or_send(callback.message, f"💰 Masukkan jumlah {pair_id.split('_')[0].upper()} untuk jual:")
                     await state.set_state(TradingStates.entering_amount)
                     await state.update_data(trade_type=action, pair_id=pair_id)
             
@@ -582,6 +613,10 @@ class TelegramBot:
     async def callback_signal(self, callback: CallbackQuery):
         """Handle signal callbacks"""
         try:
+            if not callback.data:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             data_parts = callback.data.split("_")
             action = data_parts[1]
             
@@ -589,11 +624,11 @@ class TelegramBot:
                 pair_id = data_parts[2] if len(data_parts) > 2 else "btc_idr"
                 
                 signal = await self.signal_generator.generate_signal(pair_id)
-                if signal:
+                if signal and callback.message:
                     user = await self._get_or_create_user(callback.from_user)
-                    signal_text = self.messages.format_signal(signal, user.language)
+                    signal_text = self.messages.format_signal(signal, getattr(user, 'language', 'id'))
                     
-                    await callback.message.edit_text(signal_text)
+                    await self._safe_edit_or_send(callback.message, signal_text)
                 else:
                     await callback.answer("❌ Tidak dapat memperbarui sinyal.")
             
@@ -606,26 +641,30 @@ class TelegramBot:
     async def callback_settings(self, callback: CallbackQuery, state: FSMContext):
         """Handle settings callbacks"""
         try:
+            if not callback.data or not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             data_parts = callback.data.split("_")
             action = data_parts[1]
             
             user = await self._get_or_create_user(callback.from_user)
             
             if action == "stoploss":
-                await callback.message.answer("🛑 Masukkan nilai Stop Loss (%):")
+                await self._safe_edit_or_send(callback.message, "🛑 Masukkan nilai Stop Loss (%):")
                 await state.set_state(SettingsStates.editing_stop_loss)
             elif action == "takeprofit":
-                await callback.message.answer("🎯 Masukkan nilai Take Profit (%):")
+                await self._safe_edit_or_send(callback.message, "🎯 Masukkan nilai Take Profit (%):")
                 await state.set_state(SettingsStates.editing_take_profit)
             elif action == "maxamount":
-                await callback.message.answer("💰 Masukkan jumlah maksimal trading (IDR):")
+                await self._safe_edit_or_send(callback.message, "💰 Masukkan jumlah maksimal trading (IDR):")
                 await state.set_state(SettingsStates.editing_max_trade_amount)
             elif action == "language":
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="🇮🇩 Bahasa Indonesia", callback_data="lang_id")],
                     [InlineKeyboardButton(text="🇺🇸 English", callback_data="lang_en")]
                 ])
-                await callback.message.edit_text("🌐 Pilih bahasa:", reply_markup=keyboard)
+                await self._safe_edit_or_send(callback.message, "🌐 Pilih bahasa:", keyboard)
             
             await callback.answer()
             
@@ -636,6 +675,10 @@ class TelegramBot:
     async def callback_confirm(self, callback: CallbackQuery, state: FSMContext):
         """Handle confirmation callbacks"""
         try:
+            if not callback.data or not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             data_parts = callback.data.split("_")
             action = data_parts[1]
             
@@ -651,12 +694,12 @@ class TelegramBot:
                 if trade_type and amount > 0:
                     await self._execute_trade(callback.message, user, pair_id, trade_type, amount)
                 else:
-                    await callback.message.answer("❌ Data trading tidak valid.")
+                    await self._safe_edit_or_send(callback.message, "❌ Data trading tidak valid.")
                 
                 await state.clear()
                 
             elif action == "no":
-                await callback.message.edit_text("❌ Trading dibatalkan.")
+                await self._safe_edit_or_send(callback.message, "❌ Trading dibatalkan.")
                 await state.clear()
             
             await callback.answer()
@@ -668,6 +711,10 @@ class TelegramBot:
     async def callback_language(self, callback: CallbackQuery):
         """Handle language selection callbacks"""
         try:
+            if not callback.data or not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             data_parts = callback.data.split("_")
             lang_code = data_parts[1]
             
@@ -676,11 +723,11 @@ class TelegramBot:
             # Update user language
             db = get_db()
             try:
-                user.language = lang_code
+                setattr(user, 'language', lang_code)
                 db.commit()
                 
                 lang_name = "Bahasa Indonesia" if lang_code == "id" else "English"
-                await callback.message.edit_text(f"✅ Bahasa berhasil diubah ke {lang_name}")
+                await self._safe_edit_or_send(callback.message, f"✅ Bahasa berhasil diubah ke {lang_name}")
                 
             finally:
                 db.close()
@@ -698,6 +745,10 @@ class TelegramBot:
                 await callback.answer("❌ Akses ditolak.")
                 return
             
+            if not callback.data or not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             data_parts = callback.data.split("_")
             action = data_parts[1]
             
@@ -711,7 +762,7 @@ class TelegramBot:
 ⭐ Premium Users: {stats.get('premium_users', 0)}
 📈 Total Trades: {stats.get('total_trades', 0)}
 """
-                await callback.message.edit_text(stats_text)
+                await self._safe_edit_or_send(callback.message, stats_text)
             
             await callback.answer()
             
@@ -722,6 +773,10 @@ class TelegramBot:
     async def process_trade_amount(self, message: Message, state: FSMContext):
         """Process trade amount input"""
         try:
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid.")
+                return
+                
             amount_text = message.text.strip()
             
             # Try to parse amount
@@ -759,7 +814,7 @@ class TelegramBot:
             confirm_text = f"""
 🔄 **Konfirmasi Trading**
 
-Action: {trade_type.upper()}
+Action: {str(trade_type).upper() if trade_type else 'UNKNOWN'}
 Pair: {pair_id.upper()}
 Amount: {format_currency(amount)} IDR
 
@@ -776,6 +831,10 @@ Lanjutkan trading?
     async def process_stop_loss(self, message: Message, state: FSMContext):
         """Process stop loss setting"""
         try:
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid.")
+                return
+                
             value_text = message.text.strip().replace("%", "")
             
             try:
@@ -798,7 +857,7 @@ Lanjutkan trading?
                     settings_record = UserSettings(user_id=user.id)
                     db.add(settings_record)
                 
-                settings_record.stop_loss_percentage = stop_loss
+                setattr(settings_record, 'stop_loss_percentage', stop_loss)
                 db.commit()
                 
                 await message.answer(f"✅ Stop Loss berhasil diubah ke {stop_loss}%")
@@ -816,6 +875,10 @@ Lanjutkan trading?
     async def process_take_profit(self, message: Message, state: FSMContext):
         """Process take profit setting"""
         try:
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid.")
+                return
+                
             value_text = message.text.strip().replace("%", "")
             
             try:
@@ -838,7 +901,7 @@ Lanjutkan trading?
                     settings_record = UserSettings(user_id=user.id)
                     db.add(settings_record)
                 
-                settings_record.take_profit_percentage = take_profit
+                setattr(settings_record, 'take_profit_percentage', take_profit)
                 db.commit()
                 
                 await message.answer(f"✅ Take Profit berhasil diubah ke {take_profit}%")
@@ -856,6 +919,10 @@ Lanjutkan trading?
     async def process_max_trade_amount(self, message: Message, state: FSMContext):
         """Process max trade amount setting"""
         try:
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid.")
+                return
+                
             amount_text = message.text.strip()
             
             try:
@@ -893,17 +960,32 @@ Lanjutkan trading?
             await message.answer("❌ Terjadi kesalahan. Silakan coba lagi.")
             await state.clear()
     
+    async def _safe_edit_or_send(self, callback_message, text: str, reply_markup=None):
+        """Safely edit message or send new one if edit fails"""
+        try:
+            if hasattr(callback_message, 'edit_text'):
+                await callback_message.edit_text(text, reply_markup=reply_markup)
+            else:
+                await callback_message.answer(text, reply_markup=reply_markup)
+        except Exception:
+            # If edit fails, try to send new message
+            try:
+                await callback_message.answer(text, reply_markup=reply_markup)
+            except Exception:
+                # If both fail, ignore silently
+                pass
+    
     # Helper Methods
     
     async def _get_portfolio_data(self, user) -> Dict[str, Any]:
         """Get real portfolio data from Indodax"""
         try:
-            if not user.indodax_api_key or not user.indodax_secret_key:
+            if not getattr(user, 'indodax_api_key', None) or not getattr(user, 'indodax_secret_key', None):
                 return {"error": "API credentials not set"}
             
             # Decrypt API credentials
-            api_key = decrypt_api_key(str(user.indodax_api_key))
-            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            api_key = decrypt_api_key(str(getattr(user, 'indodax_api_key', '')))
+            secret_key = decrypt_api_key(str(getattr(user, 'indodax_secret_key', '')))
             
             # Create user-specific API client
             user_api = IndodaxAPI(api_key, secret_key)
@@ -955,13 +1037,13 @@ Lanjutkan trading?
     async def _execute_trade(self, message, user, pair_id: str, trade_type: str, amount: float):
         """Execute real trade on Indodax"""
         try:
-            if not user.indodax_api_key or not user.indodax_secret_key:
+            if not getattr(user, 'indodax_api_key', None) or not getattr(user, 'indodax_secret_key', None):
                 await message.answer("❌ API credentials belum diatur. Gunakan /daftar untuk setup.")
                 return
             
             # Decrypt API credentials
-            api_key = decrypt_api_key(str(user.indodax_api_key))
-            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            api_key = decrypt_api_key(str(getattr(user, 'indodax_api_key', '')))
+            secret_key = decrypt_api_key(str(getattr(user, 'indodax_secret_key', '')))
             
             # Create user-specific API client
             user_api = IndodaxAPI(api_key, secret_key)
@@ -1138,7 +1220,7 @@ Order akan dieksekusi sesuai kondisi pasar.
                 
                 for user in users:
                     try:
-                        await self.bot.send_message(user.telegram_id, message_text)
+                        await self.bot.send_message(getattr(user, 'telegram_id', 0), message_text)
                         success_count += 1
                         # Small delay to avoid rate limits
                         await asyncio.sleep(0.1)
@@ -1161,7 +1243,7 @@ Order akan dieksekusi sesuai kondisi pasar.
             db = get_db()
             try:
                 user = db.query(User).filter(User.id == user_id).first()
-                if not user or not user.indodax_api_key:
+                if not user or not getattr(user, 'indodax_api_key', None):
                     return
                 
                 # Decrypt API credentials
@@ -1188,7 +1270,7 @@ Order akan dieksekusi sesuai kondisi pasar.
                                         # Update database
                                         trade = db.query(Trade).filter(Trade.order_id == str(order_id)).first()
                                         if trade:
-                                            trade.status = "completed"
+                                            setattr(trade, 'status', "completed")
                                             trade.updated_at = datetime.utcnow()
                                             db.commit()
                                         
@@ -1200,7 +1282,7 @@ Order akan dieksekusi sesuai kondisi pasar.
                                         # Update database
                                         trade = db.query(Trade).filter(Trade.order_id == str(order_id)).first()
                                         if trade:
-                                            trade.status = "cancelled"
+                                            setattr(trade, 'status', "cancelled")
                                             trade.updated_at = datetime.utcnow()
                                             db.commit()
                                         
@@ -1269,6 +1351,10 @@ Status: ❌ CANCELLED
     async def callback_amount_selection(self, callback: CallbackQuery, state: FSMContext):
         """Handle amount selection callbacks"""
         try:
+            if not callback.data or not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             data_parts = callback.data.split("_")
             if len(data_parts) < 3:
                 await callback.answer("❌ Data tidak valid.")
@@ -1315,12 +1401,14 @@ Saldo IDR: {format_currency(idr_balance)} IDR
 Lanjutkan trading?
 """
                 
-                await callback.message.edit_text(confirm_text, reply_markup=keyboard)
+                await self._safe_edit_or_send(callback.message, confirm_text, keyboard)
                 
             elif action == "custom":
                 # Ask for custom amount input
-                await callback.message.edit_text(f"💰 Masukkan jumlah IDR untuk {trade_type} {pair_id.upper()}: (Min. 10,000 IDR)")
+                await self._safe_edit_or_send(callback.message, f"💰 Masukkan jumlah IDR untuk {trade_type} {pair_id.upper()} : (Min. 10,000 IDR)")
                 await state.set_state(TradingStates.entering_amount)
+            
+            await callback.answer()
             
             await callback.answer()
             
@@ -1332,8 +1420,8 @@ Lanjutkan trading?
         """Show buy amount selection with balance and percentage options"""
         try:
             # Get user's IDR balance
-            api_key = decrypt_api_key(str(user.indodax_api_key))
-            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            api_key = decrypt_api_key(str(getattr(user, 'indodax_api_key', '')))
+            secret_key = decrypt_api_key(str(getattr(user, 'indodax_secret_key', '')))
             user_api = IndodaxAPI(api_key, secret_key)
             
             balance_data = await user_api.get_balance()
@@ -1377,20 +1465,24 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
     async def callback_portfolio(self, callback: CallbackQuery):
         """Handle portfolio callback"""
         try:
+            if not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             user = await self._get_or_create_user(callback.from_user)
             
-            if not user.indodax_api_key:
-                await callback.message.edit_text("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+            if not getattr(user, 'indodax_api_key', None):
+                await self._safe_edit_or_send(callback.message, "❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
                 return
             
             # Get portfolio data
             portfolio_data = await self._get_portfolio_data(user)
             if "error" in portfolio_data:
-                await callback.message.edit_text(f"❌ Error: {portfolio_data['error']}")
+                await self._safe_edit_or_send(callback.message, f"❌ Error: {portfolio_data['error']}")
                 return
                 
-            portfolio_text = self.messages.format_portfolio(portfolio_data, user.language)
-            await callback.message.edit_text(portfolio_text)
+            portfolio_text = self.messages.format_portfolio(portfolio_data, getattr(user, 'language', 'id'))
+            await self._safe_edit_or_send(callback.message, portfolio_text)
             await callback.answer()
             
         except Exception as e:
@@ -1400,21 +1492,25 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
     async def callback_balance(self, callback: CallbackQuery):
         """Handle balance callback"""
         try:
+            if not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             user = await self._get_or_create_user(callback.from_user)
             
-            if not user.indodax_api_key:
-                await callback.message.edit_text("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+            if not getattr(user, 'indodax_api_key', None):
+                await self._safe_edit_or_send(callback.message, "❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
                 return
                 
             # Get balance from Indodax
-            api_key = decrypt_api_key(str(user.indodax_api_key))
-            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            api_key = decrypt_api_key(str(getattr(user, 'indodax_api_key', '')))
+            secret_key = decrypt_api_key(str(getattr(user, 'indodax_secret_key', '')))
             
             user_api = IndodaxAPI(api_key, secret_key)
             balance_data = await user_api.get_balance()
             
-            balance_text = self.messages.format_balance(balance_data, user.language)
-            await callback.message.edit_text(balance_text)
+            balance_text = self.messages.format_balance(balance_data, getattr(user, 'language', 'id'))
+            await self._safe_edit_or_send(callback.message, balance_text)
             await callback.answer()
             
         except Exception as e:
@@ -1424,13 +1520,17 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
     async def callback_signals(self, callback: CallbackQuery):
         """Handle signals callback"""
         try:
+            if not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             user = await self._get_or_create_user(callback.from_user)
             
             # Generate signal
             signal = await self.signal_generator.generate_signal("btc_idr")
             
             if signal:
-                signal_text = self.messages.format_signal(signal, user.language)
+                signal_text = self.messages.format_signal(signal, getattr(user, 'language', 'id'))
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(
                         text="🔄 Update Signal",
@@ -1438,14 +1538,17 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
                     ),
                     InlineKeyboardButton(
                         text="💹 Trade",
-                        callback_data=f"trade_btc_idr_{signal.signal_type}"
+                        callback_data=f"trade_btc_idr_{getattr(signal, 'signal_type', 'buy')}"
                     )
                 ]])
                 
-                await callback.message.edit_text(signal_text, reply_markup=keyboard)
+                try:
+                    await self._safe_edit_or_send(callback.message, signal_text, keyboard)
+                except Exception:
+                    await self._safe_edit_or_send(callback.message, signal_text, keyboard)
             else:
-                await callback.message.edit_text("❌ Tidak dapat menghasilkan sinyal saat ini.")
-                
+                await self._safe_edit_or_send(callback.message, "❌ Tidak dapat menghasilkan sinyal saat ini.")
+            
             await callback.answer()
             
         except Exception as e:
@@ -1455,14 +1558,18 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
     async def callback_trading(self, callback: CallbackQuery):
         """Handle trading callback"""
         try:
-            user = await self._get_or_create_user(callback.from_user)
-            
-            if not user.indodax_api_key:
-                await callback.message.edit_text("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+            if not callback.message:
+                await callback.answer("❌ Data tidak valid.")
                 return
                 
-            keyboard = create_trading_keyboard("buy", user.language)
-            await callback.message.edit_text("💹 Pilih jenis trading:", reply_markup=keyboard)
+            user = await self._get_or_create_user(callback.from_user)
+            
+            if not getattr(user, 'indodax_api_key', None):
+                await self._safe_edit_or_send(callback.message, "❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+                return
+                
+            keyboard = create_trading_keyboard("buy", getattr(user, 'language', 'id'))
+            await self._safe_edit_or_send(callback.message, "💹 Pilih jenis trading:", keyboard)
             await callback.answer()
             
         except Exception as e:
@@ -1472,21 +1579,25 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
     async def callback_orders(self, callback: CallbackQuery):
         """Handle orders callback"""
         try:
-            user = await self._get_or_create_user(callback.from_user)
-            
-            if not user.indodax_api_key:
-                await callback.message.edit_text("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+            if not callback.message:
+                await callback.answer("❌ Data tidak valid.")
                 return
                 
+            user = await self._get_or_create_user(callback.from_user)
+            
+            if not getattr(user, 'indodax_api_key', None):
+                await self._safe_edit_or_send(callback.message, "❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+                return
+            
             # Get open orders
-            api_key = decrypt_api_key(str(user.indodax_api_key))
-            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            api_key = decrypt_api_key(str(getattr(user, 'indodax_api_key', '')))
+            secret_key = decrypt_api_key(str(getattr(user, 'indodax_secret_key', '')))
             
             user_api = IndodaxAPI(api_key, secret_key)
             orders_data = await user_api.get_open_orders()
             
-            orders_text = self.messages.format_orders(orders_data, user.language)
-            await callback.message.edit_text(orders_text)
+            orders_text = self.messages.format_orders(orders_data, getattr(user, 'language', 'id'))
+            await self._safe_edit_or_send(callback.message, orders_text)
             await callback.answer()
             
         except Exception as e:
@@ -1496,11 +1607,15 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
     async def callback_settings_menu(self, callback: CallbackQuery):
         """Handle settings menu callback"""
         try:
+            if not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             user = await self._get_or_create_user(callback.from_user)
-            settings_keyboard = create_settings_keyboard(user.language)
-            settings_text = self.messages.get_settings_message(user.language)
+            settings_keyboard = create_settings_keyboard(getattr(user, 'language', 'id'))
+            settings_text = self.messages.get_settings_message(getattr(user, 'language', 'id'))
             
-            await callback.message.edit_text(settings_text, reply_markup=settings_keyboard)
+            await self._safe_edit_or_send(callback.message, settings_text, settings_keyboard)
             await callback.answer()
             
         except Exception as e:
@@ -1510,10 +1625,14 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
     async def callback_help(self, callback: CallbackQuery):
         """Handle help callback"""
         try:
+            if not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             user = await self._get_or_create_user(callback.from_user)
-            help_text = self.messages.get_help_message(user.language)
+            help_text = self.messages.get_help_message(getattr(user, 'language', 'id'))
             
-            await callback.message.edit_text(help_text)
+            await self._safe_edit_or_send(callback.message, help_text)
             await callback.answer()
             
         except Exception as e:
