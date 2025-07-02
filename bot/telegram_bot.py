@@ -2,12 +2,21 @@
 Telegram bot interface for the AI Trading Bot
 """
 import asyncio
-from datetime import datetime
+import os
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 import json
 
+# Import untuk backtesting visualization
+try:
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -19,6 +28,8 @@ from config.settings import settings
 from core.database import get_db, User, Trade, Portfolio, AISignal, UserSettings
 from core.indodax_api import IndodaxAPI
 from ai.signal_generator import SignalGenerator
+from core.backtester import Backtester
+from bot.enhanced_features import EnhancedTradingFeatures
 from bot.keyboards import create_main_keyboard, create_trading_keyboard, create_settings_keyboard
 from bot.messages import Messages
 from bot.utils import format_currency, is_admin_user, encrypt_api_key, decrypt_api_key
@@ -49,6 +60,8 @@ class TelegramBot:
         self.dp = Dispatcher(storage=MemoryStorage())
         self.router = Router()
         self.signal_generator = SignalGenerator()
+        self.backtester = Backtester()
+        self.enhanced_features = EnhancedTradingFeatures(self, self.signal_generator)
         self.messages = Messages()
         
         # Register handlers
@@ -91,6 +104,7 @@ class TelegramBot:
         # Callback query handlers
         self.router.callback_query(F.data.startswith("trade_"))(self.callback_trade)
         self.router.callback_query(F.data.startswith("signal_"))(self.callback_signal)
+        self.router.callback_query(F.data.startswith("backtest_"))(self.callback_backtest)
         self.router.callback_query(F.data.startswith("settings_"))(self.callback_settings)
         self.router.callback_query(F.data.startswith("confirm_"))(self.callback_confirm)
         self.router.callback_query(F.data.startswith("lang_"))(self.callback_language)
@@ -172,14 +186,14 @@ class TelegramBot:
                 
                 if user:
                     # Update user info if changed
-                    if (user.username != telegram_user.username or 
-                        user.first_name != telegram_user.first_name or
-                        user.last_name != telegram_user.last_name):
+                    if (getattr(user, 'username') != telegram_user.username or 
+                        getattr(user, 'first_name') != telegram_user.first_name or
+                        getattr(user, 'last_name') != telegram_user.last_name):
                         
-                        user.username = telegram_user.username
-                        user.first_name = telegram_user.first_name
-                        user.last_name = telegram_user.last_name
-                        user.updated_at = datetime.utcnow()
+                        setattr(user, 'username', telegram_user.username)
+                        setattr(user, 'first_name', telegram_user.first_name)
+                        setattr(user, 'last_name', telegram_user.last_name)
+                        setattr(user, 'updated_at', datetime.utcnow())
                         db.commit()
                     
                     return user
@@ -217,8 +231,8 @@ class TelegramBot:
         try:
             user = await self._get_or_create_user(message.from_user)
             
-            welcome_text = self.messages.get_welcome_message(user.language)
-            keyboard = create_main_keyboard(user.language)
+            welcome_text = self.messages.get_welcome_message(getattr(user, 'language', 'id'))
+            keyboard = create_main_keyboard(getattr(user, 'language', 'id'))
             
             await message.answer(welcome_text, reply_markup=keyboard)
             
@@ -230,7 +244,7 @@ class TelegramBot:
         """Handle /help command"""
         try:
             user = await self._get_or_create_user(message.from_user)
-            help_text = self.messages.get_help_message(user.language)
+            help_text = self.messages.get_help_message(getattr(user, 'language', 'id'))
             
             await message.answer(help_text)
             
@@ -243,11 +257,11 @@ class TelegramBot:
         try:
             user = await self._get_or_create_user(message.from_user)
             
-            if user.indodax_api_key:
+            if getattr(user, 'indodax_api_key', None):
                 await message.answer("✅ Anda sudah terdaftar dan terkoneksi dengan Indodax!")
                 return
             
-            register_text = self.messages.get_registration_message(user.language)
+            register_text = self.messages.get_registration_message(getattr(user, 'language', 'id'))
             await message.answer(register_text)
             
             await state.set_state(RegistrationStates.waiting_for_api_key)
@@ -261,13 +275,13 @@ class TelegramBot:
         try:
             user = await self._get_or_create_user(message.from_user)
             
-            if not user.indodax_api_key:
+            if not getattr(user, 'indodax_api_key', None):
                 await message.answer("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
                 return
             
             # Get portfolio data
             portfolio_data = await self._get_portfolio_data(user)
-            portfolio_text = self.messages.format_portfolio(portfolio_data, user.language)
+            portfolio_text = self.messages.format_portfolio(portfolio_data, getattr(user, 'language', 'id'))
             
             await message.answer(portfolio_text)
             
@@ -280,20 +294,20 @@ class TelegramBot:
         try:
             user = await self._get_or_create_user(message.from_user)
             
-            if not user.indodax_api_key:
+            if not getattr(user, 'indodax_api_key', None):
                 await message.answer("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
                 return
             
             # Get balance from Indodax
-            api_key = decrypt_api_key(str(user.indodax_api_key))
-            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            api_key = decrypt_api_key(str(getattr(user, 'indodax_api_key', '')))
+            secret_key = decrypt_api_key(str(getattr(user, 'indodax_secret_key', '')))
             
             user_api = IndodaxAPI(api_key, secret_key)
             balance_data = await user_api.get_balance()
             
             logger.info("Balance data received", balance_data=balance_data, data_type=type(balance_data))
             
-            balance_text = self.messages.format_balance(balance_data, user.language)
+            balance_text = self.messages.format_balance(balance_data, getattr(user, 'language', 'id'))
             await message.answer(balance_text)
             
         except Exception as e:
@@ -301,37 +315,24 @@ class TelegramBot:
             await message.answer("❌ Terjadi kesalahan saat mengambil data saldo.")
     
     async def cmd_signal(self, message: Message):
-        """Handle /signal command"""
+        """Handle /signal command with enhanced AI analysis"""
         try:
             user = await self._get_or_create_user(message.from_user)
             
             # Parse command for specific pair
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid.")
+                return
+                
             command_parts = message.text.split()
-            pair_id = "btc_idr"  # default
+            pair_id = None
             
             if len(command_parts) > 1:
                 requested_pair = command_parts[1].lower()
                 pair_id = f"{requested_pair}_idr"
             
-            # Generate or get latest signal
-            signal = await self.signal_generator.generate_signal(pair_id)
-            
-            if signal:
-                signal_text = self.messages.format_signal(signal, user.language)
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(
-                        text="🔄 Update Signal",
-                        callback_data=f"signal_update_{pair_id}"
-                    ),
-                    InlineKeyboardButton(
-                        text="💹 Trade",
-                        callback_data=f"trade_{pair_id}_{signal.signal_type}"
-                    )
-                ]])
-                
-                await message.answer(signal_text, reply_markup=keyboard)
-            else:
-                await message.answer("❌ Tidak dapat menghasilkan sinyal saat ini. Coba lagi nanti.")
+            # Use enhanced signal generation
+            await self.enhanced_features.enhanced_signal_generation(message, pair_id)
             
         except Exception as e:
             logger.error("Failed to handle signal command", error=str(e))
@@ -350,14 +351,16 @@ class TelegramBot:
         try:
             user = await self._get_or_create_user(message.from_user)
             
-            if not user.indodax_api_key:
+            if not getattr(user, 'indodax_api_key', None):
                 await message.answer("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
                 return
             
-            # Parse command arguments
+            # Check if message.text is available
             if not message.text:
-                await message.answer("❌ Pesan tidak valid")
+                await message.answer("❌ Pesan tidak valid.")
                 return
+            
+            # Parse command arguments
             command_parts = message.text.split()
             
             if len(command_parts) >= 3:
@@ -369,8 +372,8 @@ class TelegramBot:
                 await self._execute_trade(message, user, pair_id, trade_type, amount)
             else:
                 # Interactive trade selection
-                keyboard = create_trading_keyboard(trade_type, user.language)
-                trade_text = self.messages.get_trade_selection_message(trade_type, user.language)
+                keyboard = create_trading_keyboard(trade_type, getattr(user, 'language', 'id'))
+                trade_text = self.messages.get_trade_selection_message(trade_type, getattr(user, 'language', 'id'))
                 
                 await message.answer(trade_text, reply_markup=keyboard)
                 await state.set_state(TradingStates.selecting_pair)
@@ -387,18 +390,18 @@ class TelegramBot:
         try:
             user = await self._get_or_create_user(message.from_user)
             
-            if not user.indodax_api_key:
+            if not getattr(user, 'indodax_api_key', None):
                 await message.answer("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
                 return
             
             # Get open orders
-            api_key = decrypt_api_key(str(user.indodax_api_key))
-            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            api_key = decrypt_api_key(str(getattr(user, 'indodax_api_key', '')))
+            secret_key = decrypt_api_key(str(getattr(user, 'indodax_secret_key', '')))
             
             user_api = IndodaxAPI(api_key, secret_key)
             orders_data = await user_api.get_open_orders()
             
-            orders_text = self.messages.format_orders(orders_data, user.language)
+            orders_text = self.messages.format_orders(orders_data, getattr(user, 'language', 'id'))
             await message.answer(orders_text)
             
         except Exception as e:
@@ -409,8 +412,8 @@ class TelegramBot:
         """Handle /settings command"""
         try:
             user = await self._get_or_create_user(message.from_user)
-            settings_keyboard = create_settings_keyboard(user.language)
-            settings_text = self.messages.get_settings_message(user.language)
+            settings_keyboard = create_settings_keyboard(getattr(user, 'language', 'id'))
+            settings_text = self.messages.get_settings_message(getattr(user, 'language', 'id'))
             
             await message.answer(settings_text, reply_markup=settings_keyboard)
             
@@ -437,7 +440,7 @@ class TelegramBot:
     
     async def cmd_admin(self, message: Message):
         """Handle /admin command"""
-        if not is_admin_user(message.from_user.id):
+        if not message.from_user or not is_admin_user(message.from_user.id):
             await message.answer("❌ Anda tidak memiliki akses admin.")
             return
         
@@ -455,7 +458,11 @@ class TelegramBot:
     
     async def cmd_broadcast(self, message: Message):
         """Handle /broadcast command"""
-        if not is_admin_user(message.from_user.id):
+        if not message.from_user or not is_admin_user(message.from_user.id):
+            return
+        
+        if not message.text:
+            await message.answer("❌ Pesan tidak valid.")
             return
         
         command_parts = message.text.split(" ", 1)
@@ -468,7 +475,7 @@ class TelegramBot:
     
     async def cmd_stats(self, message: Message):
         """Handle /stats command"""
-        if not is_admin_user(message.from_user.id):
+        if not message.from_user or not is_admin_user(message.from_user.id):
             return
         
         try:
@@ -486,6 +493,10 @@ class TelegramBot:
     async def process_api_key(self, message: Message, state: FSMContext):
         """Process API key input during registration"""
         try:
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid. Silakan masukkan API key yang benar.")
+                return
+                
             api_key = message.text.strip()
             
             # Basic validation
@@ -505,6 +516,10 @@ class TelegramBot:
     async def process_secret_key(self, message: Message, state: FSMContext):
         """Process secret key input during registration"""
         try:
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid. Silakan masukkan secret key yang benar.")
+                return
+                
             secret_key = message.text.strip()
             
             # Basic validation
@@ -527,18 +542,24 @@ class TelegramBot:
                 if result and result.get("success") == 1:
                     # Save encrypted credentials
                     user = await self._get_or_create_user(message.from_user)
-                    user.indodax_api_key = encrypt_api_key(api_key)
-                    user.indodax_secret_key = encrypt_api_key(secret_key)
                     
-                    db = get_db()
-                    try:
-                        db.merge(user)
-                        db.commit()
-                    finally:
-                        db.close()
-                    
-                    await state.clear()
-                    await message.answer("✅ Pendaftaran berhasil! Akun Anda telah terhubung dengan Indodax.")
+                    # Ensure api_key and secret_key are not None
+                    if api_key and secret_key:
+                        setattr(user, 'indodax_api_key', encrypt_api_key(api_key))
+                        setattr(user, 'indodax_secret_key', encrypt_api_key(secret_key))
+                        
+                        db = get_db()
+                        try:
+                            db.merge(user)
+                            db.commit()
+                        finally:
+                            db.close()
+                        
+                        await state.clear()
+                        await message.answer("✅ Pendaftaran berhasil! Akun Anda telah terhubung dengan Indodax.")
+                    else:
+                        await message.answer("❌ API key atau secret key tidak valid.")
+                        await state.clear()
                 else:
                     error_msg = result.get("error", "Unknown error") if result else "API call failed"
                     logger.error("API validation failed", error=error_msg)
@@ -560,6 +581,10 @@ class TelegramBot:
     async def callback_trade(self, callback: CallbackQuery, state: FSMContext):
         """Handle trading callbacks"""
         try:
+            if not callback.data:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             data_parts = callback.data.split("_")
             action = data_parts[1]  # trade action
             
@@ -572,7 +597,7 @@ class TelegramBot:
                     await self._show_buy_amount_selection(callback.message, user, pair_id, state)
                 else:
                     # For sell, show different options
-                    await callback.message.answer(f"💰 Masukkan jumlah {pair_id.split('_')[0].upper()} untuk jual:")
+                    await self._safe_edit_or_send(callback.message, f"💰 Masukkan jumlah {pair_id.split('_')[0].upper()} untuk jual:")
                     await state.set_state(TradingStates.entering_amount)
                     await state.update_data(trade_type=action, pair_id=pair_id)
             
@@ -585,6 +610,10 @@ class TelegramBot:
     async def callback_signal(self, callback: CallbackQuery):
         """Handle signal callbacks"""
         try:
+            if not callback.data:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             data_parts = callback.data.split("_")
             action = data_parts[1]
             
@@ -592,11 +621,11 @@ class TelegramBot:
                 pair_id = data_parts[2] if len(data_parts) > 2 else "btc_idr"
                 
                 signal = await self.signal_generator.generate_signal(pair_id)
-                if signal:
+                if signal and callback.message:
                     user = await self._get_or_create_user(callback.from_user)
-                    signal_text = self.messages.format_signal(signal, user.language)
+                    signal_text = self.messages.format_signal(signal, getattr(user, 'language', 'id'))
                     
-                    await callback.message.edit_text(signal_text)
+                    await self._safe_edit_or_send(callback.message, signal_text)
                 else:
                     await callback.answer("❌ Tidak dapat memperbarui sinyal.")
             
@@ -609,26 +638,30 @@ class TelegramBot:
     async def callback_settings(self, callback: CallbackQuery, state: FSMContext):
         """Handle settings callbacks"""
         try:
+            if not callback.data or not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             data_parts = callback.data.split("_")
             action = data_parts[1]
             
             user = await self._get_or_create_user(callback.from_user)
             
             if action == "stoploss":
-                await callback.message.answer("🛑 Masukkan nilai Stop Loss (%):")
+                await self._safe_edit_or_send(callback.message, "🛑 Masukkan nilai Stop Loss (%):")
                 await state.set_state(SettingsStates.editing_stop_loss)
             elif action == "takeprofit":
-                await callback.message.answer("🎯 Masukkan nilai Take Profit (%):")
+                await self._safe_edit_or_send(callback.message, "🎯 Masukkan nilai Take Profit (%):")
                 await state.set_state(SettingsStates.editing_take_profit)
             elif action == "maxamount":
-                await callback.message.answer("💰 Masukkan jumlah maksimal trading (IDR):")
+                await self._safe_edit_or_send(callback.message, "💰 Masukkan jumlah maksimal trading (IDR):")
                 await state.set_state(SettingsStates.editing_max_trade_amount)
             elif action == "language":
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="🇮🇩 Bahasa Indonesia", callback_data="lang_id")],
                     [InlineKeyboardButton(text="🇺🇸 English", callback_data="lang_en")]
                 ])
-                await callback.message.edit_text("🌐 Pilih bahasa:", reply_markup=keyboard)
+                await self._safe_edit_or_send(callback.message, "🌐 Pilih bahasa:", keyboard)
             
             await callback.answer()
             
@@ -639,6 +672,10 @@ class TelegramBot:
     async def callback_confirm(self, callback: CallbackQuery, state: FSMContext):
         """Handle confirmation callbacks"""
         try:
+            if not callback.data or not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             data_parts = callback.data.split("_")
             action = data_parts[1]
             
@@ -654,12 +691,12 @@ class TelegramBot:
                 if trade_type and amount > 0:
                     await self._execute_trade(callback.message, user, pair_id, trade_type, amount)
                 else:
-                    await callback.message.answer("❌ Data trading tidak valid.")
+                    await self._safe_edit_or_send(callback.message, "❌ Data trading tidak valid.")
                 
                 await state.clear()
                 
             elif action == "no":
-                await callback.message.edit_text("❌ Trading dibatalkan.")
+                await self._safe_edit_or_send(callback.message, "❌ Trading dibatalkan.")
                 await state.clear()
             
             await callback.answer()
@@ -671,6 +708,10 @@ class TelegramBot:
     async def callback_language(self, callback: CallbackQuery):
         """Handle language selection callbacks"""
         try:
+            if not callback.data or not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             data_parts = callback.data.split("_")
             lang_code = data_parts[1]
             
@@ -679,11 +720,11 @@ class TelegramBot:
             # Update user language
             db = get_db()
             try:
-                user.language = lang_code
+                setattr(user, 'language', lang_code)
                 db.commit()
                 
                 lang_name = "Bahasa Indonesia" if lang_code == "id" else "English"
-                await callback.message.edit_text(f"✅ Bahasa berhasil diubah ke {lang_name}")
+                await self._safe_edit_or_send(callback.message, f"✅ Bahasa berhasil diubah ke {lang_name}")
                 
             finally:
                 db.close()
@@ -701,6 +742,10 @@ class TelegramBot:
                 await callback.answer("❌ Akses ditolak.")
                 return
             
+            if not callback.data or not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             data_parts = callback.data.split("_")
             action = data_parts[1]
             
@@ -714,7 +759,7 @@ class TelegramBot:
 ⭐ Premium Users: {stats.get('premium_users', 0)}
 📈 Total Trades: {stats.get('total_trades', 0)}
 """
-                await callback.message.edit_text(stats_text)
+                await self._safe_edit_or_send(callback.message, stats_text)
             
             await callback.answer()
             
@@ -722,9 +767,142 @@ class TelegramBot:
             logger.error("Failed to handle admin callback", error=str(e))
             await callback.answer("❌ Terjadi kesalahan.")
 
+    async def callback_backtest(self, callback_query: CallbackQuery):
+        """Handle backtest-related callbacks"""
+        try:
+            callback_data = callback_query.data or ""
+            user_id = callback_query.from_user.id if callback_query.from_user else 0
+            user = await self._get_or_create_user(callback_query.from_user)
+            
+            if callback_data == "backtest_new":
+                # User wants to run a new backtest
+                if callback_query.message:
+                    await self._safe_edit_or_send(
+                        callback_query.message,
+                        "🔄 <b>Backtest Baru</b>\n\n"
+                        "Gunakan format: <code>/backtest [pair] [strategy] [period]</code>\n\n"
+                        "<b>Contoh:</b>\n"
+                        "<code>/backtest btc ai_signals 30d</code>\n"
+                        "<code>/backtest eth buy_and_hold 90d</code>\n"
+                        "<code>/backtest sol dca 7d</code>"
+                    )
+                await callback_query.answer("Silakan jalankan backtest baru")
+                
+            elif callback_data.startswith("backtest_apply_"):
+                # Format: backtest_apply_[pair_id]_[strategy]
+                parts = callback_data.split("_")
+                if len(parts) < 4:
+                    await callback_query.answer("Format callback tidak valid")
+                    return
+                    
+                pair_id = parts[2]
+                strategy = parts[3] 
+                
+                # Check if we need to add back the underscore for pair_id
+                if "_" not in pair_id and pair_id.endswith("idr"):
+                    base_symbol = pair_id[:-3]
+                    pair_id = f"{base_symbol}_idr"
+                
+                # Show application confirmation message
+                if callback_query.message:
+                    await self._safe_edit_or_send(
+                        callback_query.message,
+                        f"⚙️ <b>Menerapkan Strategi</b>\n\n"
+                        f"<b>Pair:</b> {pair_id.upper()}\n"
+                        f"<b>Strategy:</b> {strategy}\n\n"
+                        f"Menginisialisasi pengaturan trading..."
+                    )
+                
+                db = None
+                try:
+                    # Get user settings
+                    db = get_db()
+                    user_settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+                    
+                    if not user_settings:
+                        user_settings = UserSettings(
+                            user_id=user_id,
+                            active_pairs=json.dumps([pair_id]),
+                            strategies=json.dumps({pair_id: strategy}),
+                            trade_amount_percent=10,  # Default to 10% per trade
+                            risk_level="moderate",
+                            auto_trade=True
+                        )
+                        db.add(user_settings)
+                    else:
+                        # Update existing settings
+                        active_pairs = json.loads(user_settings.active_pairs) if user_settings.active_pairs else []
+                        strategies = json.loads(user_settings.strategies) if user_settings.strategies else {}
+                        
+                        # Add or update pair and strategy
+                        if pair_id not in active_pairs:
+                            active_pairs.append(pair_id)
+                        
+                        strategies[pair_id] = strategy
+                        
+                        # Update user settings
+                        user_settings.active_pairs = json.dumps(active_pairs)
+                        user_settings.strategies = json.dumps(strategies)
+                        user_settings.auto_trade = True
+                    
+                    db.commit()
+                    
+                    # Send success message with advanced keyboard
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(text="📊 Settings", callback_data="settings_trading"),
+                            InlineKeyboardButton(text="🔄 Run Another Backtest", callback_data="backtest_new")
+                        ],
+                        [
+                            InlineKeyboardButton(text="📈 Portfolio", callback_data="portfolio")
+                        ]
+                    ])
+                    
+                    if callback_query.message:
+                        await self._safe_edit_or_send(
+                            callback_query.message,
+                            f"✅ <b>Strategi berhasil diterapkan!</b>\n\n"
+                            f"Strategi {strategy} telah diaktifkan untuk pair {pair_id.upper()}.\n\n"
+                            f"<b>Auto Trading:</b> {'Aktif ✅' if user_settings.auto_trade else 'Tidak Aktif ❌'}\n"
+                            f"<b>Risk Level:</b> {user_settings.risk_level.capitalize()}\n"
+                            f"<b>Trade Amount:</b> {user_settings.trade_amount_percent}% per trade\n\n"
+                            f"Bot akan menggunakan advanced AI signal generator untuk menghasilkan sinyal dengan akurasi dan performa yang tinggi.",
+                            keyboard
+                        )
+                    
+                    await callback_query.answer("Strategi berhasil diterapkan")
+                    
+                    # Log the action
+                    logger.info(
+                        "Applied backtest strategy", 
+                        user_id=user_id, 
+                        pair=pair_id, 
+                        strategy=strategy
+                    )
+                    
+                except Exception as db_error:
+                    logger.error("Failed to apply strategy settings", error=str(db_error))
+                    if callback_query.message:
+                        await self._safe_edit_or_send(callback_query.message, "❌ Terjadi kesalahan saat menerapkan strategi.")
+                    await callback_query.answer("Gagal menerapkan strategi")
+                finally:
+                    if db:
+                        db.close()
+            
+            else:
+                await callback_query.answer("Opsi tidak valid")
+                
+        except Exception as e:
+            logger.error("Failed to process backtest callback", error=str(e))
+            await callback_query.answer("Terjadi kesalahan")
+    
     async def process_trade_amount(self, message: Message, state: FSMContext):
         """Process trade amount input"""
         try:
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid.")
+                return
+                
             amount_text = message.text.strip()
             
             # Try to parse amount
@@ -762,7 +940,7 @@ class TelegramBot:
             confirm_text = f"""
 🔄 **Konfirmasi Trading**
 
-Action: {trade_type.upper()}
+Action: {str(trade_type).upper() if trade_type else 'UNKNOWN'}
 Pair: {pair_id.upper()}
 Amount: {format_currency(amount)} IDR
 
@@ -779,6 +957,10 @@ Lanjutkan trading?
     async def process_stop_loss(self, message: Message, state: FSMContext):
         """Process stop loss setting"""
         try:
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid.")
+                return
+                
             value_text = message.text.strip().replace("%", "")
             
             try:
@@ -801,7 +983,7 @@ Lanjutkan trading?
                     settings_record = UserSettings(user_id=user.id)
                     db.add(settings_record)
                 
-                settings_record.stop_loss_percentage = stop_loss
+                setattr(settings_record, 'stop_loss_percentage', stop_loss)
                 db.commit()
                 
                 await message.answer(f"✅ Stop Loss berhasil diubah ke {stop_loss}%")
@@ -819,6 +1001,10 @@ Lanjutkan trading?
     async def process_take_profit(self, message: Message, state: FSMContext):
         """Process take profit setting"""
         try:
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid.")
+                return
+                
             value_text = message.text.strip().replace("%", "")
             
             try:
@@ -841,7 +1027,7 @@ Lanjutkan trading?
                     settings_record = UserSettings(user_id=user.id)
                     db.add(settings_record)
                 
-                settings_record.take_profit_percentage = take_profit
+                setattr(settings_record, 'take_profit_percentage', take_profit)
                 db.commit()
                 
                 await message.answer(f"✅ Take Profit berhasil diubah ke {take_profit}%")
@@ -859,6 +1045,10 @@ Lanjutkan trading?
     async def process_max_trade_amount(self, message: Message, state: FSMContext):
         """Process max trade amount setting"""
         try:
+            if not message.text:
+                await message.answer("❌ Pesan tidak valid.")
+                return
+                
             amount_text = message.text.strip()
             
             try:
@@ -896,17 +1086,32 @@ Lanjutkan trading?
             await message.answer("❌ Terjadi kesalahan. Silakan coba lagi.")
             await state.clear()
     
+    async def _safe_edit_or_send(self, callback_message, text: str, reply_markup=None):
+        """Safely edit message or send new one if edit fails"""
+        try:
+            if hasattr(callback_message, 'edit_text'):
+                await callback_message.edit_text(text, reply_markup=reply_markup)
+            else:
+                await callback_message.answer(text, reply_markup=reply_markup)
+        except Exception:
+            # If edit fails, try to send new message
+            try:
+                await callback_message.answer(text, reply_markup=reply_markup)
+            except Exception:
+                # If both fail, ignore silently
+                pass
+    
     # Helper Methods
     
     async def _get_portfolio_data(self, user) -> Dict[str, Any]:
         """Get real portfolio data from Indodax"""
         try:
-            if not user.indodax_api_key or not user.indodax_secret_key:
+            if not getattr(user, 'indodax_api_key', None) or not getattr(user, 'indodax_secret_key', None):
                 return {"error": "API credentials not set"}
             
             # Decrypt API credentials
-            api_key = decrypt_api_key(str(user.indodax_api_key))
-            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            api_key = decrypt_api_key(str(getattr(user, 'indodax_api_key', '')))
+            secret_key = decrypt_api_key(str(getattr(user, 'indodax_secret_key', '')))
             
             # Create user-specific API client
             user_api = IndodaxAPI(api_key, secret_key)
@@ -958,13 +1163,13 @@ Lanjutkan trading?
     async def _execute_trade(self, message, user, pair_id: str, trade_type: str, amount: float):
         """Execute real trade on Indodax"""
         try:
-            if not user.indodax_api_key or not user.indodax_secret_key:
+            if not getattr(user, 'indodax_api_key', None) or not getattr(user, 'indodax_secret_key', None):
                 await message.answer("❌ API credentials belum diatur. Gunakan /daftar untuk setup.")
                 return
             
             # Decrypt API credentials
-            api_key = decrypt_api_key(str(user.indodax_api_key))
-            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            api_key = decrypt_api_key(str(getattr(user, 'indodax_api_key', '')))
+            secret_key = decrypt_api_key(str(getattr(user, 'indodax_secret_key', '')))
             
             # Create user-specific API client
             user_api = IndodaxAPI(api_key, secret_key)
@@ -1141,7 +1346,7 @@ Order akan dieksekusi sesuai kondisi pasar.
                 
                 for user in users:
                     try:
-                        await self.bot.send_message(user.telegram_id, message_text)
+                        await self.bot.send_message(getattr(user, 'telegram_id', 0), message_text)
                         success_count += 1
                         # Small delay to avoid rate limits
                         await asyncio.sleep(0.1)
@@ -1164,7 +1369,7 @@ Order akan dieksekusi sesuai kondisi pasar.
             db = get_db()
             try:
                 user = db.query(User).filter(User.id == user_id).first()
-                if not user or not user.indodax_api_key:
+                if not user or not getattr(user, 'indodax_api_key', None):
                     return
                 
                 # Decrypt API credentials
@@ -1191,7 +1396,7 @@ Order akan dieksekusi sesuai kondisi pasar.
                                         # Update database
                                         trade = db.query(Trade).filter(Trade.order_id == str(order_id)).first()
                                         if trade:
-                                            trade.status = "completed"
+                                            setattr(trade, 'status', "completed")
                                             trade.updated_at = datetime.utcnow()
                                             db.commit()
                                         
@@ -1203,7 +1408,7 @@ Order akan dieksekusi sesuai kondisi pasar.
                                         # Update database
                                         trade = db.query(Trade).filter(Trade.order_id == str(order_id)).first()
                                         if trade:
-                                            trade.status = "cancelled"
+                                            setattr(trade, 'status', "cancelled")
                                             trade.updated_at = datetime.utcnow()
                                             db.commit()
                                         
@@ -1272,6 +1477,10 @@ Status: ❌ CANCELLED
     async def callback_amount_selection(self, callback: CallbackQuery, state: FSMContext):
         """Handle amount selection callbacks"""
         try:
+            if not callback.data or not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             data_parts = callback.data.split("_")
             if len(data_parts) < 3:
                 await callback.answer("❌ Data tidak valid.")
@@ -1318,12 +1527,14 @@ Saldo IDR: {format_currency(idr_balance)} IDR
 Lanjutkan trading?
 """
                 
-                await callback.message.edit_text(confirm_text, reply_markup=keyboard)
+                await self._safe_edit_or_send(callback.message, confirm_text, keyboard)
                 
             elif action == "custom":
                 # Ask for custom amount input
-                await callback.message.edit_text(f"💰 Masukkan jumlah IDR untuk {trade_type} {pair_id.upper()}: (Min. 10,000 IDR)")
+                await self._safe_edit_or_send(callback.message, f"💰 Masukkan jumlah IDR untuk {trade_type} {pair_id.upper()} : (Min. 10,000 IDR)")
                 await state.set_state(TradingStates.entering_amount)
+            
+            await callback.answer()
             
             await callback.answer()
             
@@ -1335,8 +1546,8 @@ Lanjutkan trading?
         """Show buy amount selection with balance and percentage options"""
         try:
             # Get user's IDR balance
-            api_key = decrypt_api_key(str(user.indodax_api_key))
-            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            api_key = decrypt_api_key(str(getattr(user, 'indodax_api_key', '')))
+            secret_key = decrypt_api_key(str(getattr(user, 'indodax_secret_key', '')))
             user_api = IndodaxAPI(api_key, secret_key)
             
             balance_data = await user_api.get_balance()
@@ -1380,20 +1591,24 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
     async def callback_portfolio(self, callback: CallbackQuery):
         """Handle portfolio callback"""
         try:
+            if not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             user = await self._get_or_create_user(callback.from_user)
             
-            if not user.indodax_api_key:
-                await callback.message.edit_text("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+            if not getattr(user, 'indodax_api_key', None):
+                await self._safe_edit_or_send(callback.message, "❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
                 return
             
             # Get portfolio data
             portfolio_data = await self._get_portfolio_data(user)
             if "error" in portfolio_data:
-                await callback.message.edit_text(f"❌ Error: {portfolio_data['error']}")
+                await self._safe_edit_or_send(callback.message, f"❌ Error: {portfolio_data['error']}")
                 return
                 
-            portfolio_text = self.messages.format_portfolio(portfolio_data, user.language)
-            await callback.message.edit_text(portfolio_text)
+            portfolio_text = self.messages.format_portfolio(portfolio_data, getattr(user, 'language', 'id'))
+            await self._safe_edit_or_send(callback.message, portfolio_text)
             await callback.answer()
             
         except Exception as e:
@@ -1403,21 +1618,25 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
     async def callback_balance(self, callback: CallbackQuery):
         """Handle balance callback"""
         try:
+            if not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             user = await self._get_or_create_user(callback.from_user)
             
-            if not user.indodax_api_key:
-                await callback.message.edit_text("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+            if not getattr(user, 'indodax_api_key', None):
+                await self._safe_edit_or_send(callback.message, "❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
                 return
                 
             # Get balance from Indodax
-            api_key = decrypt_api_key(str(user.indodax_api_key))
-            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            api_key = decrypt_api_key(str(getattr(user, 'indodax_api_key', '')))
+            secret_key = decrypt_api_key(str(getattr(user, 'indodax_secret_key', '')))
             
             user_api = IndodaxAPI(api_key, secret_key)
             balance_data = await user_api.get_balance()
             
-            balance_text = self.messages.format_balance(balance_data, user.language)
-            await callback.message.edit_text(balance_text)
+            balance_text = self.messages.format_balance(balance_data, getattr(user, 'language', 'id'))
+            await self._safe_edit_or_send(callback.message, balance_text)
             await callback.answer()
             
         except Exception as e:
@@ -1427,13 +1646,17 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
     async def callback_signals(self, callback: CallbackQuery):
         """Handle signals callback"""
         try:
+            if not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             user = await self._get_or_create_user(callback.from_user)
             
             # Generate signal
             signal = await self.signal_generator.generate_signal("btc_idr")
             
             if signal:
-                signal_text = self.messages.format_signal(signal, user.language)
+                signal_text = self.messages.format_signal(signal, getattr(user, 'language', 'id'))
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(
                         text="🔄 Update Signal",
@@ -1441,14 +1664,17 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
                     ),
                     InlineKeyboardButton(
                         text="💹 Trade",
-                        callback_data=f"trade_btc_idr_{signal.signal_type}"
+                        callback_data=f"trade_btc_idr_{getattr(signal, 'signal_type', 'buy')}"
                     )
                 ]])
                 
-                await callback.message.edit_text(signal_text, reply_markup=keyboard)
+                try:
+                    await self._safe_edit_or_send(callback.message, signal_text, keyboard)
+                except Exception:
+                    await self._safe_edit_or_send(callback.message, signal_text, keyboard)
             else:
-                await callback.message.edit_text("❌ Tidak dapat menghasilkan sinyal saat ini.")
-                
+                await self._safe_edit_or_send(callback.message, "❌ Tidak dapat menghasilkan sinyal saat ini.")
+            
             await callback.answer()
             
         except Exception as e:
@@ -1458,14 +1684,18 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
     async def callback_trading(self, callback: CallbackQuery):
         """Handle trading callback"""
         try:
-            user = await self._get_or_create_user(callback.from_user)
-            
-            if not user.indodax_api_key:
-                await callback.message.edit_text("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+            if not callback.message:
+                await callback.answer("❌ Data tidak valid.")
                 return
                 
-            keyboard = create_trading_keyboard("buy", user.language)
-            await callback.message.edit_text("💹 Pilih jenis trading:", reply_markup=keyboard)
+            user = await self._get_or_create_user(callback.from_user)
+            
+            if not getattr(user, 'indodax_api_key', None):
+                await self._safe_edit_or_send(callback.message, "❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+                return
+                
+            keyboard = create_trading_keyboard("buy", getattr(user, 'language', 'id'))
+            await self._safe_edit_or_send(callback.message, "💹 Pilih jenis trading:", keyboard)
             await callback.answer()
             
         except Exception as e:
@@ -1475,21 +1705,25 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
     async def callback_orders(self, callback: CallbackQuery):
         """Handle orders callback"""
         try:
-            user = await self._get_or_create_user(callback.from_user)
-            
-            if not user.indodax_api_key:
-                await callback.message.edit_text("❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+            if not callback.message:
+                await callback.answer("❌ Data tidak valid.")
                 return
                 
+            user = await self._get_or_create_user(callback.from_user)
+            
+            if not getattr(user, 'indodax_api_key', None):
+                await self._safe_edit_or_send(callback.message, "❌ Anda belum terdaftar. Gunakan /daftar untuk mendaftar.")
+                return
+            
             # Get open orders
-            api_key = decrypt_api_key(str(user.indodax_api_key))
-            secret_key = decrypt_api_key(str(user.indodax_secret_key))
+            api_key = decrypt_api_key(str(getattr(user, 'indodax_api_key', '')))
+            secret_key = decrypt_api_key(str(getattr(user, 'indodax_secret_key', '')))
             
             user_api = IndodaxAPI(api_key, secret_key)
             orders_data = await user_api.get_open_orders()
             
-            orders_text = self.messages.format_orders(orders_data, user.language)
-            await callback.message.edit_text(orders_text)
+            orders_text = self.messages.format_orders(orders_data, getattr(user, 'language', 'id'))
+            await self._safe_edit_or_send(callback.message, orders_text)
             await callback.answer()
             
         except Exception as e:
@@ -1499,11 +1733,15 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
     async def callback_settings_menu(self, callback: CallbackQuery):
         """Handle settings menu callback"""
         try:
+            if not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             user = await self._get_or_create_user(callback.from_user)
-            settings_keyboard = create_settings_keyboard(user.language)
-            settings_text = self.messages.get_settings_message(user.language)
+            settings_keyboard = create_settings_keyboard(getattr(user, 'language', 'id'))
+            settings_text = self.messages.get_settings_message(getattr(user, 'language', 'id'))
             
-            await callback.message.edit_text(settings_text, reply_markup=settings_keyboard)
+            await self._safe_edit_or_send(callback.message, settings_text, settings_keyboard)
             await callback.answer()
             
         except Exception as e:
@@ -1513,10 +1751,14 @@ Pilih persentase dari saldo atau masukkan jumlah custom:
     async def callback_help(self, callback: CallbackQuery):
         """Handle help callback"""
         try:
+            if not callback.message:
+                await callback.answer("❌ Data tidak valid.")
+                return
+                
             user = await self._get_or_create_user(callback.from_user)
-            help_text = self.messages.get_help_message(user.language)
+            help_text = self.messages.get_help_message(getattr(user, 'language', 'id'))
             
-            await callback.message.edit_text(help_text)
+            await self._safe_edit_or_send(callback.message, help_text)
             await callback.answer()
             
         except Exception as e:
@@ -1707,7 +1949,7 @@ Pilih opsi di bawah:
                 help_text = f"""
 📊 <b>Backtesting</b>
 
-Gunakan: <code>/backtest [pair] [strategy] [period]</code>
+Gunakan: <code>/backtest [pair] [strategy] [period] [modal]</code>
 
 <b>Pairs tersedia:</b>
 {pairs_text}
@@ -1716,19 +1958,25 @@ Gunakan: <code>/backtest [pair] [strategy] [period]</code>
 <b>Strategies:</b>
 • <code>ai_signals</code> - Backtest AI signals
 • <code>dca</code> - Backtest DCA strategy
-• <code>buy_hold</code> - Buy and hold strategy
+• <code>buy_and_hold</code> - Buy and hold strategy
 
 <b>Periods:</b>
 • <code>7d</code> - 7 hari
 • <code>30d</code> - 30 hari  
 • <code>90d</code> - 90 hari
+• <code>Xd</code> - Custom (X hari, 7-365)
+
+<b>Modal (opsional):</b>
+• Jumlah modal awal dalam IDR (default: 1.000.000 IDR)
+• Contoh: 5000000 untuk 5 juta IDR
 
 <b>Contoh:</b>
 <code>/backtest btc ai_signals 30d</code>
-<code>/backtest eth buy_hold 90d</code>
-<code>/backtest sol dca 7d</code>
+<code>/backtest eth buy_and_hold 90d 5000000</code>
+<code>/backtest sol dca 7d 10000000</code>
+<code>/backtest btc ai_signals 180d</code> (6 bulan)
 
-⚠️ <i>Semua parameter wajib diisi!</i>
+⚠️ <i>Parameter pair, strategy, dan period wajib diisi!</i>
 """
                 await message.answer(help_text, parse_mode="HTML")
                 return
@@ -1736,6 +1984,18 @@ Gunakan: <code>/backtest [pair] [strategy] [period]</code>
             pair_symbol = command_parts[1].lower()
             strategy = command_parts[2].lower()
             period = command_parts[3].lower()
+            
+            # Check for optional initial investment parameter
+            initial_balance = 1000000  # Default: 1 million IDR
+            if len(command_parts) >= 5:
+                try:
+                    custom_balance = float(command_parts[4])
+                    if custom_balance >= 10000:  # Ensure it's at least 10,000 IDR
+                        initial_balance = custom_balance
+                    else:
+                        await message.answer("⚠️ Modal minimum adalah 10.000 IDR. Menggunakan nilai default 1.000.000 IDR.")
+                except ValueError:
+                    await message.answer("⚠️ Format modal tidak valid. Menggunakan nilai default 1.000.000 IDR.")
             
             # Validate pair against API data
             try:
@@ -1774,28 +2034,63 @@ Gunakan: <code>/backtest [pair] [strategy] [period]</code>
             pair_id = f"{pair_symbol}_idr"
             
             # Validate strategy
-            valid_strategies = ["ai_signals", "dca", "buy_hold"]
+            valid_strategies = ["ai_signals", "dca", "buy_and_hold"]
             if strategy not in valid_strategies:
                 await message.answer(f"❌ Strategy {strategy} tidak didukung. Gunakan salah satu: {', '.join(valid_strategies)}")
                 return
             
             # Validate period
             valid_periods = ["7d", "30d", "90d"]
-            if period not in valid_periods:
-                await message.answer(f"❌ Period {period} tidak didukung. Gunakan salah satu: {', '.join(valid_periods)}")
+            
+            # Support custom period in format Xd where X is number of days (7-365)
+            custom_period = False
+            days_to_backtest = 0
+            if period.endswith("d") and len(period) > 1:
+                try:
+                    days_to_backtest = int(period[:-1])
+                    if 7 <= days_to_backtest <= 365:  # Support custom period from 7 days to 1 year
+                        custom_period = True
+                    else:
+                        await message.answer(f"❌ Period harus antara 7 dan 365 hari. Gunakan format seperti '30d' untuk 30 hari atau pilih salah satu: {', '.join(valid_periods)}")
+                        return
+                except ValueError:
+                    pass
+            
+            if not custom_period and period not in valid_periods:
+                await message.answer(f"❌ Period {period} tidak didukung. Gunakan salah satu: {', '.join(valid_periods)} atau custom period (misal: 60d, 120d, 365d)")
                 return
             
             await message.answer(f"🔄 Menjalankan backtest {strategy} untuk {pair_symbol.upper()}... Mohon tunggu sebentar.")
             
-            # Run backtest
+            # Run backtest with improved AI/ML capabilities
             from core.backtester import Backtester
             from datetime import datetime, timedelta
+            import asyncio
+            import os  # Ensure os is imported for file operations
+            from aiogram.types import FSInputFile  # Ensure FSInputFile is imported for sending files
+            import asyncio
+            
+            # Show loading message to improve UX
+            # Format period display
+            period_display = f"{days_to_backtest} hari" if custom_period else period
+            
+            status_message = await message.answer(
+                "🔄 <b>Memproses backtest</b>\n\n"
+                f"<b>Pair:</b> {pair_symbol.upper()}/IDR\n"
+                f"<b>Strategy:</b> {strategy}\n"
+                f"<b>Period:</b> {period_display}\n"
+                f"<b>Modal Awal:</b> {format_currency(initial_balance)} IDR\n\n"
+                "⏳ Mengumpulkan data historis..."
+            )
             
             backtester = Backtester()
             
             # Calculate dates based on period
             end_date = datetime.now()
-            if period == "7d":
+            if custom_period:
+                # Use the custom number of days
+                start_date = end_date - timedelta(days=days_to_backtest)
+            elif period == "7d":
                 start_date = end_date - timedelta(days=7)
             elif period == "30d":
                 start_date = end_date - timedelta(days=30)
@@ -1803,25 +2098,168 @@ Gunakan: <code>/backtest [pair] [strategy] [period]</code>
                 start_date = end_date - timedelta(days=90)
             else:
                 start_date = end_date - timedelta(days=30)  # default
+                
+            # Update status
+            await status_message.edit_text(
+                "🔄 <b>Memproses backtest</b>\n\n"
+                f"<b>Pair:</b> {pair_symbol.upper()}/IDR\n"
+                f"<b>Strategy:</b> {strategy}\n"
+                f"<b>Period:</b> {period_display}\n"
+                f"<b>Modal Awal:</b> {format_currency(initial_balance)} IDR\n\n"
+                "⏳ Menjalankan simulasi trading..."
+            )
             
+            # Set confidence threshold based on strategy and period length
+            # Using higher thresholds to prioritize accuracy over quantity of signals
+            confidence_threshold = 0.7  # Increased base threshold for higher accuracy
+            
+            if strategy == "ai_signals":
+                # For higher win rate, we'll use higher confidence thresholds
+                days_count = days_to_backtest if custom_period else int(period.replace('d', ''))
+                
+                # Default to high confidence for all periods
+                confidence_threshold = 0.72  # Higher baseline for all periods
+                
+                # Only slightly adjust threshold based on period length
+                if days_count > 90:  # For periods longer than 90 days
+                    confidence_threshold = 0.68  # Still high but slightly lower for longer periods
+                
+                logger.info(f"Using high precision confidence threshold {confidence_threshold} for {days_count} day period")
+                logger.info(f"Prioritizing signal quality over quantity for higher win rate")
+            elif strategy == "lstm_prediction":
+                confidence_threshold = 0.75  # Higher threshold for LSTM predictions as well
+                
+            # We'll use the existing signal generator but apply optimized parameters
+            # in the backtester's configuration for higher accuracy
+            
+            # Log our approach
+            logger.info(f"Running backtest with high precision mode using confidence threshold {confidence_threshold}")
+            logger.info(f"Optimized for higher win rate and profit per trade")
+            
+            # Run the backtest with appropriate parameters and enhanced signal generator
             results = await backtester.run_backtest(
                 pair_id=pair_id,
                 start_date=start_date,
                 end_date=end_date,
-                initial_balance=1000000,  # 1M IDR
-                strategy=strategy
+                initial_balance=initial_balance,  # Use the custom or default initial investment
+                strategy=strategy,
+                min_confidence=confidence_threshold,
+                signal_generator=self.signal_generator  # Pass the upgraded signal generator with high threshold
             )
             
             if results:
-                result_text = f"""
-📊 <b>Hasil Backtest</b>
+                # Update status while generating report
+                await status_message.edit_text(
+                    "🔄 <b>Memproses backtest</b>\n\n"
+                    f"<b>Pair:</b> {pair_symbol.upper()}/IDR\n"
+                    f"<b>Strategy:</b> {strategy}\n"
+                    f"<b>Period:</b> {period_display}\n"
+                    f"<b>Modal Awal:</b> {format_currency(initial_balance)} IDR\n\n"
+                    "⏳ Menghasilkan laporan dan visualisasi..."
+                )
+                
+                # Generate performance chart if matplotlib is available
+                chart_path = await self._generate_backtest_chart(results, pair_symbol, strategy, period, user.id)
+                
+                # Generate strategy-specific insights
+                strategy_insights = ""
+                if strategy == "ai_signals":
+                    # Extract confidence scores and accuracy from trades
+                    if results.trades:
+                        avg_confidence = sum(trade.get('confidence', 0) for trade in results.trades if 'confidence' in trade) / len(results.trades)
+                        profitable_signals = len([t for t in results.trades if t.get('pnl', 0) > 0 and t.get('confidence', 0) > 0.7])
+                        high_conf_signals = len([t for t in results.trades if t.get('confidence', 0) > 0.7])
+                        high_conf_accuracy = profitable_signals / high_conf_signals if high_conf_signals > 0 else 0
+                        
+                        # Calculate days per trade average - use custom period or parse from period string
+                        if custom_period:
+                            days_analyzed = days_to_backtest
+                        else:
+                            days_analyzed = int(period[:-1]) if period.endswith('d') and period[:-1].isdigit() else 30
+                            
+                        avg_days_between_trades = days_analyzed / results.total_trades if results.total_trades > 0 else 0
+                        
+                        # Calculate additional advanced metrics
+                        avg_profit_per_winning_trade = 0
+                        if results.winning_trades > 0:
+                            winning_trades = [t for t in results.trades if t.get('pnl', 0) > 0]
+                            avg_profit_per_winning_trade = sum(t.get('return_percent', 0) for t in winning_trades) / results.winning_trades
+                            
+                        # More comprehensive insights with emphasis on quality over quantity
+                        strategy_insights = f"""
+<b>AI Signal Insights:</b>
+• Average Confidence: {avg_confidence:.2f}
+• High Confidence Signal Accuracy: {high_conf_accuracy*100:.1f}%
+• Best Performing Indicator: {self._get_best_indicator(results.trades)}
+• Trading Frequency: 1 trade per {avg_days_between_trades:.1f} hari
+• Signal Generation Rate: {(results.total_trades/days_analyzed*30):.1f} signals/bulan
+• Profit per winning trade: {avg_profit_per_winning_trade:.2f}%
 
-Strategy: {strategy.upper()}
-Period: {period}
-Pair: {pair_symbol.upper()}/IDR
+<b>Mode Presisi Tinggi:</b>
+ℹ️ Hasil ini menggunakan threshold confidence tinggi (0.68-0.72) untuk mengutamakan kualitas sinyal daripada kuantitas.
+"""
+                elif strategy == "lstm_prediction":
+                    if results.trades:
+                        avg_prediction = sum(abs(trade.get('predicted_change', 0)) for trade in results.trades if 'predicted_change' in trade) / len(results.trades)
+                        
+                        strategy_insights = f"""
+<b>LSTM Model Insights:</b>
+• Avg Predicted Change: {avg_prediction*100:.2f}%
+• Prediction Accuracy: {results.win_rate:.1f}%
+• Best Prediction Horizon: {self._get_best_prediction_horizon(results.trades)}
+"""
+                
+                # Format main result text with strategy-specific details
+                if strategy == "dca":
+                    # Count DCA purchases
+                    dca_purchases = len([t for t in results.trades if t.get('type') == 'dca_buy'])
+                    
+                    # Get average cost basis if available
+                    avg_cost = 0
+                    final_price = 0
+                    for trade in results.trades:
+                        if trade.get('type') == 'final_sale':
+                            final_price = trade.get('price', 0)
+                        if trade.get('type') == 'dca_buy' and 'avg_cost_basis' in trade:
+                            avg_cost = trade.get('avg_cost_basis', 0)
+                    
+                    # DCA-specific result text
+                    result_text = f"""
+📊 <b>Hasil Backtest DCA</b>
+
+<b>Strategy:</b> {strategy.upper()}
+<b>Period:</b> {period_display}
+<b>Pair:</b> {pair_symbol.upper()}/IDR
 
 <b>Performance:</b>
-• Total Return: {results.total_return_percent:.2f}%
+• Total Return: <b>{results.total_return_percent:.2f}%</b>
+• Sharpe Ratio: {results.sharpe_ratio:.2f}
+• Max Drawdown: {results.max_drawdown:.2f}%
+• DCA Purchases: {dca_purchases}
+
+<b>DCA Metrics:</b>
+• Avg Purchase Price: {format_currency(avg_cost)}
+• Final Market Price: {format_currency(final_price)}
+• Price Change: {((final_price/avg_cost)-1)*100:.2f}% {("📈" if final_price > avg_cost else "📉")}
+
+<b>Balance:</b>
+• Initial Investment: {format_currency(results.initial_balance)} IDR
+• Final Value: <b>{format_currency(results.final_balance)} IDR</b>
+• Profit/Loss: {format_currency(results.total_return)} IDR {("✅" if results.total_return > 0 else "❌")}
+
+⚠️ <i>Past performance does not guarantee future results.</i>
+"""
+                else:
+                    # Standard result text for other strategies
+                    result_text = f"""
+📊 <b>Hasil Backtest</b>
+
+<b>Strategy:</b> {strategy.upper()}
+<b>Period:</b> {period_display}
+<b>Pair:</b> {pair_symbol.upper()}/IDR
+
+<b>Performance:</b>
+• Total Return: <b>{results.total_return_percent:.2f}%</b>
 • Sharpe Ratio: {results.sharpe_ratio:.2f}
 • Max Drawdown: {results.max_drawdown:.2f}%
 • Win Rate: {results.win_rate:.1f}%
@@ -1833,243 +2271,540 @@ Pair: {pair_symbol.upper()}/IDR
 
 <b>Balance:</b>
 • Initial: {format_currency(results.initial_balance)} IDR
-• Final: {format_currency(results.final_balance)} IDR
+• Final: <b>{format_currency(results.final_balance)} IDR</b>
 • Profit/Loss: {format_currency(results.total_return)} IDR
-
-⚠️ Past performance does not guarantee future results.
+{strategy_insights}
+⚠️ <i>Past performance does not guarantee future results.</i>
 """
-                await message.answer(result_text)
+                # Send chart if available
+                if chart_path and os.path.exists(chart_path):
+                    await self.bot.send_photo(
+                        message.chat.id,
+                        FSInputFile(chart_path),
+                        caption=result_text,
+                    )
+                    # Clean up
+                    try:
+                        os.remove(chart_path)
+                    except:
+                        pass
+                else:
+                    await status_message.delete()
+                    await message.answer(result_text)
+                    
+                # Store backtest result in user session data
+                backtest_data = {
+                    "pair": pair_symbol,
+                    "strategy": strategy,
+                    "period": period,
+                    "return": results.total_return_percent,
+                    "timestamp": datetime.now().timestamp()
+                }                # Create trade button if result is profitable or show warning if not enough trades
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="🔄 Run Another Backtest",
+                        callback_data=f"backtest_new"
+                    )
+                ]])
+                    
+                # Add apply strategy button only for profitable strategies
+                if results.total_return_percent > 0:
+                    keyboard.inline_keyboard[0].append(
+                        InlineKeyboardButton(
+                            text="💹 Apply Strategy",
+                            callback_data=f"backtest_apply_{pair_id}_{strategy}"
+                        )
+                    )
+                
+                # Generate AI feedback with statistical validity assessment
+                min_trades_for_validity = 10  # Lowered minimum trades for high-accuracy mode
+                
+                if results.total_trades < min_trades_for_validity:
+                    insight_text = (
+                        f"🤖 <b>AI Recommendation</b>\n\n"
+                        f"ℹ️ <b>Mode Presisi Tinggi:</b> {results.total_trades} trades selama {period_display}.\n"
+                        f"Strategi ini menggunakan filter ketat untuk mendapatkan sinyal berkualitas tinggi.\n\n"
+                    )
+                    
+                    if results.total_trades > 0:
+                        # Calculate average profit per trade for high-precision mode assessment
+                        avg_profit_per_trade = results.total_return_percent / results.total_trades if results.total_trades > 0 else 0
+                        win_rate_text = f"Win Rate: {results.win_rate:.1f}%" if results.win_rate > 0 else ""
+                        
+                        insight_text += (
+                            f"<b>Analisa Kualitas:</b>\n"
+                            f"• Profit rata-rata per trade: {avg_profit_per_trade:.2f}%\n"
+                            f"• {win_rate_text}\n"
+                            f"• Strategi {strategy} untuk {pair_symbol.upper()} " + 
+                            (f"menunjukkan hasil positif {results.total_return_percent:.1f}% dengan sinyal berkualitas tinggi." 
+                             if results.total_return_percent > 0 else 
+                             f"tidak optimal dengan return {results.total_return_percent:.1f}% meski menggunakan filter ketat.")
+                        )
+                        
+                        if results.win_rate >= 60:
+                            insight_text += "\n\n✅ <b>Rekomendasi:</b> Win rate tinggi menunjukkan strategi ini dapat diandalkan meskipun jumlah trade sedikit."
+                        elif results.total_trades < 5:
+                            insight_text += "\n\n⚠️ <b>Catatan:</b> Jumlah trades sangat sedikit. Pertimbangkan untuk menguji periode lebih panjang."
+                    else:
+                        insight_text += "Tidak ada trade yang tereksekusi pada periode ini karena standar kualitas sinyal yang sangat tinggi. Coba periode yang lebih panjang."
+                else:
+                    # Calculate additional metrics for detailed analysis
+                    avg_profit_per_trade = results.total_return_percent / results.total_trades if results.total_trades > 0 else 0
+                    successful_trades_percentage = f"{(results.winning_trades / results.total_trades * 100):.1f}%" if results.total_trades > 0 else "0%"
+                    
+                    if results.total_return_percent > 0:
+                        # For positive results, emphasize quality metrics
+                        insight_text = (
+                            f"🤖 <b>AI Recommendation</b>\n\n"
+                            f"✅ Strategi {strategy} menunjukkan hasil positif untuk {pair_symbol.upper()}.\n\n"
+                            f"<b>Analisa Kualitas:</b>\n"
+                            f"• Total Return: <b>{results.total_return_percent:.1f}%</b>\n"
+                            f"• Win Rate: <b>{results.win_rate:.1f}%</b>\n"
+                            f"• Profit rata-rata per trade: <b>{avg_profit_per_trade:.2f}%</b>\n"
+                            f"• Trades menguntungkan: {successful_trades_percentage}\n\n"
+                        )
+                        
+                        # Add specific recommendations based on metrics
+                        if results.win_rate >= 70:
+                            insight_text += f"⭐ <b>Sangat Direkomendasikan:</b> Win rate yang tinggi ({results.win_rate:.1f}%) menunjukkan strategi ini sangat dapat diandalkan."
+                        elif results.win_rate >= 50 and avg_profit_per_trade > 1.0:
+                            insight_text += f"✅ <b>Direkomendasikan:</b> Win rate baik dengan profit per trade yang menarik ({avg_profit_per_trade:.2f}%)."
+                        else:
+                            insight_text += f"👍 <b>Dapat dipertimbangkan</b> untuk trading otomatis dengan monitoring berkala."
+                    else:
+                        # For negative results, provide detailed analysis why it failed
+                        insight_text = (
+                            f"🤖 <b>AI Recommendation</b>\n\n"
+                            f"⚠️ Strategi {strategy} menunjukkan hasil negatif untuk {pair_symbol.upper()}.\n\n"
+                            f"<b>Analisa:</b>\n"
+                            f"• Total Return: <b>{results.total_return_percent:.1f}%</b>\n"
+                            f"• Win Rate: {results.win_rate:.1f}%\n"
+                            f"• Loss rata-rata per trade: {abs(avg_profit_per_trade):.2f}%\n"
+                            f"• Total trades: {results.total_trades}\n\n"
+                            f"❌ <b>Tidak Direkomendasikan:</b> Strategi ini tidak optimal untuk {pair_symbol.upper()} pada periode {period_display}."
+                        )
+                        
+                        # Add specific improvement suggestions
+                        if results.win_rate < 40:
+                            insight_text += f"\n\n💡 <b>Saran:</b> Win rate rendah ({results.win_rate:.1f}%) menunjukkan perlu penyesuaian parameter teknikal."
+                        elif abs(avg_profit_per_trade) > 2.0:
+                            insight_text += f"\n\n💡 <b>Saran:</b> Loss per trade tinggi ({abs(avg_profit_per_trade):.2f}%). Pertimbangkan strategi exit yang lebih konservatif."
+                
+                await message.answer(insight_text, reply_markup=keyboard)
             else:
+                await status_message.delete()
                 await message.answer("❌ Gagal menjalankan backtest. Silakan coba lagi nanti.")
             
         except Exception as e:
             logger.error("Failed to handle backtest command", error=str(e))
             await message.answer("❌ Terjadi kesalahan saat menjalankan backtest.")
 
+    def _get_best_indicator(self, trades):
+        """Analyze trades to find which technical indicator performed best"""
+        if not trades:
+            return "RSI"
+            
+        # Count profitable trades by indicator
+        indicator_performance = {
+            "RSI": 0,
+            "MACD": 0,
+            "Moving Averages": 0,
+            "Bollinger Bands": 0,
+            "Volume": 0
+        }
+        
+        indicator_usage = {k: 0 for k in indicator_performance.keys()}
+        
+        for trade in trades:
+            # Skip trades without indicators data
+            if 'indicators' not in trade:
+                continue
+                
+            indicators = trade.get('indicators', {})
+            is_profitable = trade.get('pnl', 0) > 0
+            
+            # Check which indicators likely triggered this trade
+            if 'rsi' in indicators:
+                rsi = indicators['rsi']
+                if (rsi < 30 and trade['type'] == 'buy') or (rsi > 70 and trade['type'] == 'sell'):
+                    indicator_usage["RSI"] += 1
+                    if is_profitable:
+                        indicator_performance["RSI"] += 1
+            
+            if 'macd' in indicators and 'macd_signal' in indicators:
+                macd = indicators['macd']
+                macd_signal = indicators['macd_signal']
+                if (macd > macd_signal and trade['type'] == 'buy') or (macd < macd_signal and trade['type'] == 'sell'):
+                    indicator_usage["MACD"] += 1
+                    if is_profitable:
+                        indicator_performance["MACD"] += 1
+            
+            if 'sma_10' in indicators and 'sma_20' in indicators:
+                sma_10 = indicators['sma_10']
+                sma_20 = indicators['sma_20']
+                if (sma_10 > sma_20 and trade['type'] == 'buy') or (sma_10 < sma_20 and trade['type'] == 'sell'):
+                    indicator_usage["Moving Averages"] += 1
+                    if is_profitable:
+                        indicator_performance["Moving Averages"] += 1
+            
+            if 'bb_upper' in indicators and 'bb_lower' in indicators:
+                bb_upper = indicators['bb_upper']
+                bb_lower = indicators['bb_lower']
+                price = trade.get('price', 0)
+                if (price < bb_lower and trade['type'] == 'buy') or (price > bb_upper and trade['type'] == 'sell'):
+                    indicator_usage["Bollinger Bands"] += 1
+                    if is_profitable:
+                        indicator_performance["Bollinger Bands"] += 1
+            
+            if 'volume_ratio' in indicators:
+                volume_ratio = indicators['volume_ratio']
+                if volume_ratio > 1.2:
+                    indicator_usage["Volume"] += 1
+                    if is_profitable:
+                        indicator_performance["Volume"] += 1
+        
+        # Calculate success rate for each indicator
+        success_rates = {}
+        for indicator, wins in indicator_performance.items():
+            if indicator_usage[indicator] > 0:
+                success_rates[indicator] = wins / indicator_usage[indicator]
+            else:
+                success_rates[indicator] = 0
+        
+        # Find indicator with highest success rate
+        best_indicator = max(success_rates.items(), key=lambda x: x[1]) if success_rates else ("RSI", 0)
+        
+        return best_indicator[0]
+    
+    def _get_best_prediction_horizon(self, trades):
+        """Analyze LSTM trades to find which prediction horizon worked best"""
+        if not trades:
+            return "1-3 days"
+            
+        # Count successful predictions at different horizons
+        horizons = {
+            "1-3 days": {"correct": 0, "total": 0},
+            "4-7 days": {"correct": 0, "total": 0},
+            "8+ days": {"correct": 0, "total": 0}
+        }
+        
+        for i in range(len(trades) - 1):
+            current_trade = trades[i]
+            
+            # Skip if not buy trade
+            if current_trade['type'] != 'buy':
+                continue
+            
+            # Find corresponding sell trade
+            sell_trade = None
+            for j in range(i+1, len(trades)):
+                if trades[j]['type'] == 'sell':
+                    sell_trade = trades[j]
+                    break
+            
+            if not sell_trade:
+                continue
+                
+            # Calculate days between trades
+            buy_date = current_trade['date']
+            sell_date = sell_trade['date']
+            days_held = (sell_date - buy_date).days
+            
+            # Determine horizon category
+            if days_held <= 3:
+                horizon = "1-3 days"
+            elif days_held <= 7:
+                horizon = "4-7 days"
+            else:
+                horizon = "8+ days"
+                
+            # Track performance
+            horizons[horizon]["total"] += 1
+            if sell_trade.get('pnl', 0) > 0:
+                horizons[horizon]["correct"] += 1
+        
+        # Find best horizon
+        best_horizon = "1-3 days"  # default
+        best_accuracy = 0
+        
+        for horizon, stats in horizons.items():
+            if stats["total"] > 0:
+                accuracy = stats["correct"] / stats["total"]
+                if accuracy > best_accuracy:
+                    best_accuracy = accuracy
+                    best_horizon = horizon
+        
+        return best_horizon
+
     async def _generate_ai_response(self, question: str, user) -> str:
         """Generate AI response for user questions"""
         try:
-            # This is a simplified AI assistant
-            # In production, you could integrate with OpenAI GPT or other LLM services
+            # Simplified AI response generator
+            # Dalam implementasi yang lebih lengkap, ini bisa menggunakan OpenAI API atau model lainnya
             
             question_lower = question.lower()
             
-            # Trading basics
-            if any(word in question_lower for word in ['trading', 'cara trading', 'bagaimana trading']):
+            # Trading-related questions
+            if any(keyword in question_lower for keyword in ["bitcoin", "btc", "trading", "buy", "sell"]):
                 return """
-📚 <b>Dasar-dasar Trading Cryptocurrency</b>
+🤖 <b>AI Trading Assistant</b>
 
-🔍 <b>Langkah-langkah Trading:</b>
-1. Riset dan analisis pasar
-2. Tentukan strategi (technical/fundamental)
-3. Kelola risiko (stop loss, position sizing)
-4. Eksekusi dengan disiplin
-5. Evaluasi dan perbaiki
+<b>Tips Trading Bitcoin:</b>
+• Selalu lakukan analisis teknikal sebelum trading
+• Gunakan stop loss untuk membatasi kerugian
+• Jangan investasi lebih dari yang Anda mampu kehilangan
+• Diversifikasi portfolio Anda
 
-💡 <b>Tips Penting:</b>
-• Jangan investasi lebih dari yang bisa Anda rugi
-• Diversifikasi portfolio
-• Gunakan stop loss
-• Kontrol emosi saat trading
+<b>Untuk analisis real-time:</b>
+• Gunakan /signal untuk mendapatkan sinyal AI
+• Gunakan /backtest untuk tes strategi
+• Monitor portfolio dengan /portfolio
 
-🤖 Gunakan fitur signal AI bot ini untuk bantuan analisis!
+💡 <i>Gunakan fitur auto-trading untuk eksekusi otomatis berdasarkan sinyal AI</i>
 """
             
-            # DCA explanation
-            elif any(word in question_lower for word in ['dca', 'dollar cost averaging']):
+            elif any(keyword in question_lower for keyword in ["dca", "dollar cost averaging"]):
                 return """
-💰 <b>Dollar Cost Averaging (DCA)</b>
+🤖 <b>Dollar Cost Averaging (DCA)</b>
 
-🎯 <b>DCA adalah strategi investasi:</b>
-• Membeli aset secara berkala dengan jumlah tetap
-• Tidak peduli harga naik atau turun
-• Mengurangi dampak volatilitas harga
+<b>Apa itu DCA?</b>
+DCA adalah strategi investasi berkala dengan jumlah tetap, mengurangi dampak volatilitas harga.
 
-✅ <b>Keuntungan DCA:</b>
-• Mengurangi risiko timing yang buruk
+<b>Keuntungan DCA:</b>
+• Mengurangi risiko timing market
 • Disiplin investasi jangka panjang
 • Cocok untuk pemula
-• Mengurangi stress trading
+• Otomatis dan konsisten
 
-📅 <b>Cara setting DCA di bot:</b>
-Gunakan menu /dca untuk mengatur
+<b>Cara menggunakan:</b>
+Gunakan /dca untuk mengatur DCA otomatis di bot ini.
 
-💡 Bot ini mendukung DCA otomatis untuk BTC dan ETH!
+💡 <i>DCA sangat efektif untuk investasi jangka panjang di cryptocurrency</i>
 """
             
-            # Market analysis
-            elif any(word in question_lower for word in ['analisa', 'analysis', 'chart', 'pasar']):
+            elif any(keyword in question_lower for keyword in ["analisa", "chart", "teknikal"]):
                 return """
-📊 <b>Analisis Pasar Cryptocurrency</b>
+🤖 <b>Analisis Teknikal</b>
 
-🔍 <b>Jenis Analisis:</b>
-
-📈 <b>Technical Analysis:</b>
-• Menggunakan chart dan indikator
-• RSI, MACD, Bollinger Bands
-• Support & Resistance levels
+<b>Indikator yang digunakan bot:</b>
+• RSI (Relative Strength Index)
+• MACD (Moving Average Convergence Divergence)
+• Bollinger Bands
+• Moving Averages
 • Volume analysis
 
-📰 <b>Fundamental Analysis:</b>
-• News dan perkembangan teknologi
-• Adopsi mainstream
-• Regulatory developments
-• Market sentiment
+<b>Signal AI menggunakan:</b>
+• Machine Learning models
+• Ensemble methods (XGBoost, LightGBM)
+• Real-time market data
 
-🤖 <b>AI Analysis:</b>
-• Kombinasi technical + sentiment
-• Machine learning predictions
-• Real-time signal generation
+<b>Untuk analisis langsung:</b>
+Gunakan /signal [pair] untuk analisis real-time
 
-💡 Gunakan /signal untuk mendapat analisis AI terbaru!
+💡 <i>Bot menggunakan 15+ indikator teknikal untuk prediksi akurat</i>
 """
             
-            # When to buy/sell
-            elif any(word in question_lower for word in ['kapan buy', 'when buy', 'kapan beli', 'waktu buy']):
+            elif any(keyword in question_lower for keyword in ["kapan", "timing", "waktu"]):
                 return """
-⏰ <b>Kapan Waktu yang Tepat untuk Buy?</b>
+🤖 <b>Market Timing</b>
 
-🎯 <b>Indikator Buy Signal:</b>
-• RSI < 30 (oversold)
-• Price break above resistance
-• Volume spike dengan price increase
-• Positive news/sentiment
-• AI confidence > 70%
+<b>Prinsip timing yang baik:</b>
+• Beli saat RSI < 30 (oversold)
+• Jual saat RSI > 70 (overbought)
+• Perhatikan volume trading
+• Ikuti trend jangka panjang
 
-📉 <b>Kondisi Market yang Baik:</b>
-• Market dalam uptrend
-• Support level yang kuat
-• Low volatility periods
-• After major corrections
+<b>Gunakan AI untuk timing:</b>
+• /signal untuk prediksi harga
+• /backtest untuk tes strategi
+• Auto-trading untuk eksekusi otomatis
 
-🤖 <b>Gunakan AI Bot:</b>
-• /signal untuk cek kondisi terkini
-• Set auto-trading untuk eksekusi otomatis
-• Monitor dengan portfolio tracker
+<b>Tips penting:</b>
+• Jangan panic selling
+• HODL untuk jangka panjang
+• DCA untuk mengurangi risiko timing
 
-⚠️ <b>Ingat:</b> Tidak ada waktu yang "perfect" - selalu gunakan risk management!
-"""
-            
-            # Risk management
-            elif any(word in question_lower for word in ['risk', 'risiko', 'stop loss', 'risk management']):
-                return """
-🛡️ <b>Risk Management dalam Trading</b>
-
-📏 <b>Position Sizing:</b>
-• Maksimal 2-5% portfolio per trade
-• Diversifikasi di beberapa aset
-• Jangan all-in dalam satu trade
-
-🔴 <b>Stop Loss:</b>
-• Set maksimal 3-5% loss per trade
-• Gunakan technical levels sebagai guide
-• Stick to your plan!
-
-📊 <b>Portfolio Management:</b>
-• Maksimal 10-20% dalam crypto
-• Keep emergency fund
-• Regular profit taking
-
-⚙️ <b>Bot Features:</b>
-• Auto stop loss/take profit
-• Risk validation sebelum trade
-• Daily trade limits
-• Portfolio tracking
-
-💡 Gunakan /settings untuk atur risk parameters!
-"""
-            
-            # Bitcoin specific
-            elif any(word in question_lower for word in ['bitcoin', 'btc']):
-                return """
-₿ <b>Tentang Bitcoin (BTC)</b>
-
-🏆 <b>King of Crypto:</b>
-• First cryptocurrency (2009)
-• Store of value digital
-• Limited supply: 21 juta BTC
-• Proof of Work consensus
-
-📈 <b>Bitcoin sebagai Investment:</b>
-• Long-term appreciation potential
-• Hedge against inflation
-• Institutional adoption meningkat
-• Portfolio diversification
-
-🔍 <b>Trading BTC:</b>
-• High liquidity
-• 24/7 market
-• Volatility tinggi = opportunity
-• Korelasi dengan traditional markets
-
-🤖 <b>BTC di Bot ini:</b>
-• Real-time signals
-• Auto-trading support
-• DCA scheduling
-• Portfolio tracking
-
-💡 Gunakan /signal BTC untuk analisis terbaru!
-"""
-            
-            # General crypto question
-            elif any(word in question_lower for word in ['crypto', 'cryptocurrency']):
-                return """
-🚀 <b>Cryptocurrency Overview</b>
-
-💰 <b>Apa itu Cryptocurrency?</b>
-• Digital asset berbasis blockchain
-• Decentralized dan secure
-• Global payment system
-• Investment vehicle
-
-🔝 <b>Top Cryptocurrencies:</b>
-• Bitcoin (BTC) - Digital Gold
-• Ethereum (ETH) - Smart Contracts
-• USDT - Stablecoin
-• BNB, ADA, SOL, dll
-
-🎯 <b>Cara Mulai:</b>
-1. Pelajari basic concepts
-2. Pilih exchange terpercaya (Indodax)
-3. Start dengan amount kecil
-4. Gunakan tools seperti bot ini
-
-🤖 <b>Bot Features untuk Crypto:</b>
-• Multi-pair trading
-• AI-powered signals
-• Risk management
-• Portfolio analytics
-
-📚 Pelajari lebih lanjut dengan /help command!
+💡 <i>AI bot dapat membantu timing dengan akurasi 70%+</i>
 """
             
             else:
-                # Default response for unrecognized questions
-                return f"""
-🤖 <b>AI Assistant</b>
+                # Generic response
+                return """
+🤖 <b>AI Trading Assistant</b>
 
-Pertanyaan Anda: "{question}"
+Maaf, saya belum bisa menjawab pertanyaan spesifik tersebut.
 
-Maaf, saya belum bisa menjawab pertanyaan spesifik ini. Tapi saya bisa membantu dengan:
+<b>Yang bisa saya bantu:</b>
+• Analisis trading dan cryptocurrency
+• Strategi investasi DCA
+• Timing pasar dan analisis teknikal
+• Tips trading Bitcoin dan altcoin
 
-📚 <b>Topics yang bisa ditanyakan:</b>
-• Cara trading cryptocurrency
-• Strategi DCA (Dollar Cost Averaging)
-• Analisis market dan chart
-• Kapan waktu buy/sell yang tepat
-• Risk management dan stop loss
-• Informasi Bitcoin dan crypto lainnya
-
-💡 <b>Contoh pertanyaan:</b>
-• "Apa itu DCA?"
+<b>Contoh pertanyaan:</b>
 • "Bagaimana cara trading Bitcoin?"
+• "Apa itu DCA?"
 • "Kapan waktu yang tepat untuk buy?"
+• "Analisa chart BTC hari ini"
 
-🤖 Untuk analisis real-time, gunakan /signal
-📊 Untuk cek portfolio, gunakan /portfolio
-⚙️ Untuk pengaturan, gunakan /settings
+💡 <i>Gunakan /help untuk melihat semua fitur bot</i>
 """
-            
+                
         except Exception as e:
             logger.error("Failed to generate AI response", error=str(e))
-            return "❌ Maaf, terjadi kesalahan dalam sistem AI. Silakan coba lagi nanti."
+            return "❌ Maaf, terjadi kesalahan dalam AI assistant. Silakan coba lagi."
+
+    async def _generate_backtest_chart(self, results, pair_symbol, strategy, period, user_id):
+        """Generate backtest chart for visualization"""
+        chart_path = None
+        
+        # Check if matplotlib is available
+        if not MATPLOTLIB_AVAILABLE:
+            logger.warning("Matplotlib not available, skipping chart generation")
+            return None
+            
+        try:
+            # Local imports to avoid scope issues
+            import matplotlib.pyplot as plt
+            import matplotlib.dates as mdates
+            from matplotlib.ticker import FuncFormatter
+            import numpy as np
+            import os
+            from datetime import datetime
+            import matplotlib.ticker as mtick  # For percentage formatting
+            
+            # Create equity curve chart
+            plt.figure(figsize=(12, 8))
+            
+            # Extract data from equity curve
+            dates = [point['date'] for point in results.equity_curve]
+            equity = [point['equity'] for point in results.equity_curve]
+            
+            # Extract balance and position values if available
+            balance = [point.get('balance', 0) for point in results.equity_curve]
+            position_value = [point.get('position_value', 0) for point in results.equity_curve]
+            
+            # Create plot with clear titles and improved labels
+            plt.plot(dates, equity, label='Total Equity (Cash + Crypto)', color='blue', linewidth=2.5)
+            
+            # Plot balance and position components for clearer understanding
+            if strategy == "dca":
+                plt.plot(dates, position_value, label='Crypto Holdings Value', color='purple', linestyle='-', linewidth=1.5, alpha=0.8)
+                plt.plot(dates, balance, label='Remaining Cash', color='green', linestyle='-', linewidth=1.5, alpha=0.7)
+            
+            # Plot initial balance as horizontal line
+            plt.axhline(y=results.initial_balance, color='red', linestyle='--', label='Initial Investment')
+            
+            # Add final balance marker with clearer annotation
+            plt.scatter([dates[-1]], [equity[-1]], color='gold', marker='*', s=200, zorder=5, 
+                        label=f'Final Value: {format_currency(results.final_balance)} IDR')
+            
+            # Add profit/loss percentage annotation at the end of chart
+            plt_text = f"{results.total_return_percent:+.2f}%"
+            plt.annotate(plt_text, xy=(dates[-1], equity[-1]), 
+                        xytext=(10, 20), textcoords='offset points',
+                        bbox=dict(boxstyle="round,pad=0.3", fc='gold', alpha=0.7),
+                        fontweight='bold', fontsize=12, color='black' if results.total_return_percent >= 0 else 'red')
+            
+            # Add buy/sell markers from trades with clearer positioning and visualization
+            # Track the position in equity to place markers correctly
+            if strategy == "dca":
+                # For DCA, place markers on the total equity line at purchase/sale times
+                for trade in results.trades:
+                    trade_date = trade['date']
+                    # Find the equity value at this date for proper marker placement
+                    equity_at_date = next((point['equity'] for point in results.equity_curve if point['date'] == trade_date), None)
+                    
+                    if equity_at_date is not None:
+                        if trade['type'] == 'dca_buy':
+                            plt.scatter(trade_date, equity_at_date, color='green', marker='^', s=100, zorder=5,
+                                       label='DCA Buy' if 'DCA Buy' not in plt.gca().get_legend_handles_labels()[1] else "")
+                        elif trade['type'] == 'final_sale':
+                            plt.scatter(trade_date, equity_at_date, color='red', marker='v', s=120, zorder=5,
+                                       label='Final Sale' if 'Final Sale' not in plt.gca().get_legend_handles_labels()[1] else "")
+            else:
+                # For other strategies, use standard trade markers
+                for trade in results.trades:
+                    if trade['type'] == 'buy':
+                        # Find the equity at this point for better visualization
+                        trade_date = trade['date']
+                        equity_at_date = next((point['equity'] for point in results.equity_curve if point['date'] == trade_date), None)
+                        if equity_at_date:
+                            plt.scatter(trade_date, equity_at_date, color='green', marker='^', s=100, zorder=5,
+                                       label='Buy' if 'Buy' not in plt.gca().get_legend_handles_labels()[1] else "")
+                    elif trade['type'] == 'sell' or trade['type'] == 'final_sale':
+                        trade_date = trade['date']
+                        equity_at_date = next((point['equity'] for point in results.equity_curve if point['date'] == trade_date), None)
+                        if equity_at_date:
+                            plt.scatter(trade_date, equity_at_date, color='red', marker='v', s=100, zorder=5,
+                                       label='Sell' if 'Sell' not in plt.gca().get_legend_handles_labels()[1] else "")
+            
+            # Format chart with more descriptive title
+            title_str = f'{pair_symbol.upper()}/IDR {strategy.upper()} Backtest ({period})'
+            if strategy == "dca":
+                title_str += f"\nDollar Cost Averaging - Return: {results.total_return_percent:.2f}%"
+            elif strategy == "ai_signals":
+                title_str += f"\nAI Signal-based Trading - Return: {results.total_return_percent:.2f}%"
+            elif strategy == "buy_and_hold":
+                title_str += f"\nBuy and Hold Strategy - Return: {results.total_return_percent:.2f}%"
+            else:
+                title_str += f"\nReturn: {results.total_return_percent:.2f}%"
+                
+            plt.title(title_str, fontsize=14)
+            plt.xlabel('Date', fontsize=12)
+            plt.ylabel('Value (IDR)', fontsize=12)
+            plt.grid(True, linestyle='--', alpha=0.7)
+            
+            # Format y-axis as IDR currency with thousands separator
+            def idr_formatter(x, pos):
+                return f'Rp {x:,.0f}'
+            plt.gca().yaxis.set_major_formatter(FuncFormatter(idr_formatter))
+            
+            # Format x-axis dates with better spacing
+            plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
+            plt.gcf().autofmt_xdate()  # Auto-format the date labels
+            
+            # Add annotations for key metrics with improved labeling
+            props = dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.8)
+            
+            # Create more detailed metrics text based on strategy
+            if strategy == "dca":
+                metrics_text = (f"Total Return: {results.total_return_percent:.2f}%\n"
+                               f"Final Result: {'Profitable' if results.total_return_percent > 0 else 'Loss'}\n"
+                               f"Max Drawdown: {results.max_drawdown:.2f}%\n"
+                               f"Purchases: {len([t for t in results.trades if t['type'] == 'dca_buy'])}")
+            else:
+                metrics_text = (f"Total Return: {results.total_return_percent:.2f}%\n"
+                               f"Win Rate: {results.win_rate:.1f}%\n"
+                               f"Trades: {results.winning_trades} wins, {results.losing_trades} losses\n"
+                               f"Max Drawdown: {results.max_drawdown:.2f}%")
+            
+            plt.annotate(metrics_text, xy=(0.02, 0.02), xycoords='axes fraction', fontsize=11,
+                        bbox=props, verticalalignment='bottom')
+            
+            # Create a better legend
+            handles, labels = plt.gca().get_legend_handles_labels()
+            # Remove duplicate labels
+            unique_labels = []
+            unique_handles = []
+            for handle, label in zip(handles, labels):
+                if label not in unique_labels:
+                    unique_labels.append(label)
+                    unique_handles.append(handle)
+            
+            # Place legend at the top-right corner outside of the plot
+            plt.legend(unique_handles, unique_labels, loc='upper left', framealpha=0.9, fontsize=10)
+            
+            # Ensure temp directory exists
+            os.makedirs('temp', exist_ok=True)
+            
+            # Save chart to temporary file
+            chart_path = f"temp/backtest_{user_id}_{int(datetime.now().timestamp())}.png"
+            plt.tight_layout()
+            plt.savefig(chart_path, dpi=100, bbox_inches='tight')
+            plt.close()
+            
+            return chart_path
+            
+        except Exception as e:
+            logger.error("Failed to generate backtest chart", error=str(e))
+            return None

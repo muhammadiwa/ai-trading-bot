@@ -154,7 +154,7 @@ async def init_database():
 
 def get_db() -> Session:
     """Get database session"""
-    if not SessionLocal:
+    if SessionLocal is None:
         raise RuntimeError("Database not initialized. Call init_database() first.")
     db = SessionLocal()
     try:

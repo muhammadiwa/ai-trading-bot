@@ -65,52 +65,64 @@ class AutoTrader:
     async def _process_user_auto_trades(self, user: User):
         """Process auto-trades for a specific user"""
         try:
+            # Cast user.id to int to fix type checking
+            user_id = int(user.id)  # type: ignore
+            
             # Check daily trade limit
-            daily_trades = await self._get_daily_auto_trades_count(user.id)
+            daily_trades = await self._get_daily_auto_trades_count(user_id)
             if daily_trades >= self.max_trades_per_day:
-                logger.info("Daily auto-trade limit reached", user_id=user.id)
+                logger.info("Daily auto-trade limit reached", user_id=user_id)
                 return
             
             # Get user settings
-            user_settings = await self._get_user_settings(user.id)
+            user_settings = await self._get_user_settings(user_id)
             
             # Get active trading pairs
-            trading_pairs = await self._get_user_trading_pairs(user.id)
+            trading_pairs = await self._get_user_trading_pairs(user_id)
             
             for pair_id in trading_pairs:
                 try:
                     await self._check_and_execute_auto_trade(user, pair_id, user_settings)
                 except Exception as e:
                     logger.error("Failed to check auto-trade for pair", 
-                               user_id=user.id, pair_id=pair_id, error=str(e))
+                               user_id=user_id, pair_id=pair_id, error=str(e))
                     continue
             
         except Exception as e:
-            logger.error("Failed to process user auto-trades", user_id=user.id, error=str(e))
+            # Use user.id for error logging since user_id might not be defined yet
+            logger.error("Failed to process user auto-trades", user_id=int(user.id), error=str(e))  # type: ignore
     
     async def _check_and_execute_auto_trade(self, user: User, pair_id: str, user_settings: Dict[str, Any]):
         """Check for trading signals and execute auto-trade if conditions are met"""
         try:
+            # Cast user.id to int for function calls
+            user_id = int(user.id)  # type: ignore
+            telegram_id = int(user.telegram_id)  # type: ignore
+            
             # Generate or get latest signal
             signal = await self.signal_generator.generate_signal(pair_id)
             
             if not signal:
                 return
             
+            # Extract signal values for comparison
+            signal_confidence = getattr(signal, 'confidence', 0.0)
+            signal_type = getattr(signal, 'signal_type', 'hold')
+            
             # Check signal confidence
-            if signal.confidence < self.min_signal_confidence:
+            if signal_confidence < self.min_signal_confidence:
                 logger.debug("Signal confidence too low for auto-trading", 
-                           pair_id=pair_id, confidence=signal.confidence)
+                           pair_id=pair_id, confidence=signal_confidence)
                 return
             
             # Check if signal is actionable (buy/sell, not hold)
-            if signal.signal_type == "hold":
+            if signal_type == "hold":
                 return
             
             # Check if we already have a recent trade for this signal
-            if await self._has_recent_signal_trade(user.id, pair_id, signal.signal_type):
+            if await self._has_recent_signal_trade(user_id, pair_id, signal_type):
                 logger.debug("Recent trade already exists for this signal", 
-                           user_id=user.id, pair_id=pair_id, signal_type=signal.signal_type)
+                           user_id=user_id, pair_id=pair_id, signal_type=signal_type)
                 return
             
             # Calculate trade amount based on user settings
@@ -118,7 +130,7 @@ class AutoTrader:
             
             if trade_amount <= 0:
                 logger.warning("Invalid trade amount calculated", 
-                             user_id=user.id, pair_id=pair_id, amount=trade_amount)
+                             user_id=user_id, pair_id=pair_id, amount=trade_amount)
                 return
             
             # Execute auto-trade
@@ -126,11 +138,18 @@ class AutoTrader:
             
         except Exception as e:
             logger.error("Failed to check and execute auto-trade", 
-                       user_id=user.id, pair_id=pair_id, error=str(e))
+                       user_id=int(user.id), pair_id=pair_id, error=str(e))  # type: ignore
     
     async def _execute_auto_trade(self, user: User, pair_id: str, signal: AISignal, amount: float):
         """Execute automatic trade based on signal"""
         try:
+            # Cast user attributes to proper types
+            user_id = int(user.id)  # type: ignore
+            telegram_id = int(user.telegram_id)  # type: ignore
+            
+            # Extract signal values
+            signal_type = getattr(signal, 'signal_type', 'hold')
+            
             # Get current market price
             api_key = decrypt_api_key(str(user.indodax_api_key))
             secret_key = decrypt_api_key(str(user.indodax_secret_key))
@@ -146,7 +165,7 @@ class AutoTrader:
             
             ticker_data = ticker["ticker"]
             
-            if signal.signal_type == "buy":
+            if signal_type == "buy":
                 price = float(ticker_data.get("sell", 0))  # Use sell price for buying
             else:  # sell
                 price = float(ticker_data.get("buy", 0))   # Use buy price for selling
@@ -157,24 +176,24 @@ class AutoTrader:
             
             # Validate trade with risk manager
             risk_validation = await self.risk_manager.validate_trade(
-                user, pair_id, signal.signal_type, amount, price
+                user, pair_id, signal_type, amount, price
             )
             
             if not risk_validation["allowed"]:
                 logger.warning("Auto-trade rejected by risk manager", 
-                             user_id=user.id, pair_id=pair_id, 
+                             user_id=user_id, pair_id=pair_id, 
                              errors=risk_validation["errors"])
                 
                 # Notify user about rejected trade
                 if self.telegram_bot:
                     await self._notify_user_trade_rejected(
-                        user.telegram_id, pair_id, signal, risk_validation["errors"]
+                        telegram_id, pair_id, signal, risk_validation["errors"]
                     )
                 return
             
             # Execute the trade
             try:
-                if signal.signal_type == "buy":
+                if signal_type == "buy":
                     result = await user_api.trade(
                         pair=pair_id,
                         type="buy",
@@ -194,55 +213,55 @@ class AutoTrader:
                 if result.get("success") == 1:
                     # Save trade to database
                     await self._save_auto_trade(
-                        user.id, pair_id, signal, result["return"]["order_id"], 
-                        signal.signal_type, quantity, price, amount
+                        user_id, pair_id, signal, result["return"]["order_id"], 
+                        signal_type, quantity, price, amount
                     )
                     
                     # Notify user about successful trade
                     if self.telegram_bot:
                         await self._notify_user_trade_executed(
-                            user.telegram_id, pair_id, signal, result["return"]["order_id"], 
-                            signal.signal_type, quantity, price, amount
+                            telegram_id, pair_id, signal, result["return"]["order_id"], 
+                            signal_type, quantity, price, amount
                         )
                     
                     logger.info("Auto-trade executed successfully", 
-                               user_id=user.id, pair_id=pair_id, 
+                               user_id=user_id, pair_id=pair_id, 
                                order_id=result["return"]["order_id"],
-                               signal_type=signal.signal_type,
+                               signal_type=signal_type,
                                amount=amount)
                 else:
                     error_msg = result.get("error", "Unknown error")
                     logger.error("Auto-trade execution failed", 
-                               user_id=user.id, pair_id=pair_id, error=error_msg)
+                               user_id=user_id, pair_id=pair_id, error=error_msg)
                     
                     # Notify user about failed trade
                     if self.telegram_bot:
                         await self._notify_user_trade_failed(
-                            user.telegram_id, pair_id, signal, error_msg
+                            telegram_id, pair_id, signal, error_msg
                         )
                 
             except Exception as e:
                 logger.error("Failed to execute auto-trade", 
-                           user_id=user.id, pair_id=pair_id, error=str(e))
+                           user_id=user_id, pair_id=pair_id, error=str(e))
                 
                 # Notify user about failed trade
                 if self.telegram_bot:
                     await self._notify_user_trade_failed(
-                        user.telegram_id, pair_id, signal, str(e)
+                        telegram_id, pair_id, signal, str(e)
                     )
             
         except Exception as e:
             logger.error("Failed to execute auto-trade", 
-                       user_id=user.id, pair_id=pair_id, error=str(e))
+                       user_id=int(user.id), pair_id=pair_id, error=str(e))  # type: ignore
     
     async def _calculate_auto_trade_amount(self, user: User, pair_id: str, user_settings: Dict[str, Any]) -> float:
         """Calculate trade amount for auto-trading"""
         try:
             # Get user's auto-trading settings
-            base_amount = user_settings.get('auto_trade_amount', user.max_trade_amount)
+            base_amount = user_settings.get('auto_trade_amount', getattr(user, 'max_trade_amount', 100000.0))
             
             # Apply position sizing based on risk level
-            risk_level = user.risk_level
+            risk_level = getattr(user, 'risk_level', 'medium')
             if risk_level == "low":
                 multiplier = 0.5
             elif risk_level == "high":
@@ -257,7 +276,7 @@ class AutoTrader:
             
         except Exception as e:
             logger.error("Failed to calculate auto-trade amount", 
-                       user_id=user.id, pair_id=pair_id, error=str(e))
+                       user_id=int(user.id), pair_id=pair_id, error=str(e))  # type: ignore
             return 0.0
     
     async def _get_daily_auto_trades_count(self, user_id: int) -> int:
@@ -461,7 +480,8 @@ class AutoTrader:
             try:
                 user = db.query(User).filter(User.id == user_id).first()
                 if user:
-                    user.auto_trading_enabled = True
+                    # Use setattr for proper SQLAlchemy attribute assignment
+                    setattr(user, 'auto_trading_enabled', True)
                     db.commit()
                     logger.info("Auto-trading enabled", user_id=user_id)
                     return True
@@ -479,7 +499,8 @@ class AutoTrader:
             try:
                 user = db.query(User).filter(User.id == user_id).first()
                 if user:
-                    user.auto_trading_enabled = False
+                    # Use setattr for proper SQLAlchemy attribute assignment
+                    setattr(user, 'auto_trading_enabled', False)
                     db.commit()
                     logger.info("Auto-trading disabled", user_id=user_id)
                     return True

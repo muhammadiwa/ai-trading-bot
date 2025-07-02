@@ -61,20 +61,23 @@ class DCAManager:
     async def _process_user_dca(self, user: User):
         """Process DCA for a specific user"""
         try:
+            # Cast user.id to int to fix type checking
+            user_id = int(user.id)  # type: ignore
+            
             # Get user DCA settings
-            dca_settings = await self._get_dca_settings(int(user.id))
+            dca_settings = await self._get_dca_settings(user_id)
             
             if not dca_settings:
-                logger.warning("No DCA settings found", user_id=user.id)
+                logger.warning("No DCA settings found", user_id=user_id)
                 return
             
             # Check if it's time for DCA trade
-            if not await self._is_dca_due(int(user.id), dca_settings):
-                logger.debug("DCA not due yet", user_id=user.id)
+            if not await self._is_dca_due(user_id, dca_settings):
+                logger.debug("DCA not due yet", user_id=user_id)
                 return
             
             # Get DCA pairs for user
-            dca_pairs = await self._get_dca_pairs(int(user.id))
+            dca_pairs = await self._get_dca_pairs(user_id)
             
             total_amount_per_pair = dca_settings['dca_amount'] / len(dca_pairs)
             
@@ -83,7 +86,7 @@ class DCAManager:
                     await self._execute_dca_trade(user, pair_id, total_amount_per_pair, dca_settings)
                 except Exception as e:
                     logger.error("Failed to execute DCA trade for pair", 
-                               user_id=user.id, pair_id=pair_id, error=str(e))
+                               user_id=user_id, pair_id=pair_id, error=str(e))
                     continue
             
         except Exception as e:
@@ -92,6 +95,10 @@ class DCAManager:
     async def _execute_dca_trade(self, user: User, pair_id: str, amount: float, dca_settings: Dict[str, Any]):
         """Execute DCA trade for a specific pair"""
         try:
+            # Cast user attributes to proper types
+            user_id = int(user.id)  # type: ignore
+            telegram_id = int(user.telegram_id)  # type: ignore
+            
             # Get current market price
             api_key = decrypt_api_key(str(user.indodax_api_key))
             secret_key = decrypt_api_key(str(user.indodax_secret_key))
@@ -119,13 +126,13 @@ class DCAManager:
             
             if not risk_validation["allowed"]:
                 logger.warning("DCA trade rejected by risk manager", 
-                             user_id=user.id, pair_id=pair_id, 
+                             user_id=user_id, pair_id=pair_id, 
                              errors=risk_validation["errors"])
                 
                 # Notify user about rejected DCA
                 if self.telegram_bot:
                     await self._notify_dca_rejected(
-                        user.telegram_id, pair_id, amount, risk_validation["errors"]
+                        telegram_id, pair_id, amount, risk_validation["errors"]
                     )
                 return
             
@@ -143,48 +150,49 @@ class DCAManager:
                     
                     # Save DCA trade to database
                     await self._save_dca_trade(
-                        user.id, pair_id, result["return"]["order_id"], 
+                        user_id, pair_id, result["return"]["order_id"], 
                         quantity, price, amount
                     )
                     
                     # Update last DCA timestamp
-                    await self._update_last_dca_timestamp(user.id)
+                    await self._update_last_dca_timestamp(user_id)
                     
                     # Notify user about successful DCA
                     if self.telegram_bot:
                         await self._notify_dca_executed(
-                            user.telegram_id, pair_id, result["return"]["order_id"], 
+                            telegram_id, pair_id, result["return"]["order_id"],
                             quantity, price, amount
                         )
                     
                     logger.info("DCA trade executed successfully", 
-                               user_id=user.id, pair_id=pair_id, 
+                               user_id=user_id, pair_id=pair_id, 
                                order_id=result["return"]["order_id"],
                                amount=amount)
                 else:
                     error_msg = result.get("error", "Unknown error")
                     logger.error("DCA trade execution failed", 
-                               user_id=user.id, pair_id=pair_id, error=error_msg)
+                               user_id=user_id, pair_id=pair_id, error=error_msg)
                     
                     # Notify user about failed DCA
                     if self.telegram_bot:
                         await self._notify_dca_failed(
-                            user.telegram_id, pair_id, amount, error_msg
+                            telegram_id, pair_id, amount, error_msg
                         )
                 
             except Exception as e:
                 logger.error("Failed to execute DCA trade", 
-                           user_id=user.id, pair_id=pair_id, error=str(e))
+                           user_id=user_id, pair_id=pair_id, error=str(e))
                 
                 # Notify user about failed DCA
                 if self.telegram_bot:
                     await self._notify_dca_failed(
-                        user.telegram_id, pair_id, amount, str(e)
+                        telegram_id, pair_id, amount, str(e)
                     )
             
         except Exception as e:
+            # Use user.id for error logging since user_id might not be defined
             logger.error("Failed to execute DCA trade", 
-                       user_id=user.id, pair_id=pair_id, error=str(e))
+                       user_id=int(user.id), pair_id=pair_id, error=str(e))  # type: ignore
     
     async def _get_dca_settings(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Get user DCA settings"""
@@ -193,13 +201,13 @@ class DCAManager:
             try:
                 settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
                 
-                if not settings or not settings.dca_enabled:
+                if not settings or getattr(settings, 'dca_enabled', False) is not True:
                     return None
                 
                 return {
-                    'dca_amount': settings.dca_amount,
-                    'dca_interval': settings.dca_interval,
-                    'dca_enabled': settings.dca_enabled
+                    'dca_amount': getattr(settings, 'dca_amount', 0.0),
+                    'dca_interval': getattr(settings, 'dca_interval', 'daily'),
+                    'dca_enabled': getattr(settings, 'dca_enabled', False)
                 }
                 
             finally:
@@ -227,13 +235,17 @@ class DCAManager:
                 # Check interval
                 interval = dca_settings['dca_interval']
                 now = datetime.now()
+                last_created_at = getattr(last_dca, 'created_at', None)
+                
+                if not last_created_at:
+                    return True
                 
                 if interval == "daily":
-                    next_dca = last_dca.created_at + timedelta(days=1)
+                    next_dca = last_created_at + timedelta(days=1)
                 elif interval == "weekly":
-                    next_dca = last_dca.created_at + timedelta(weeks=1)
+                    next_dca = last_created_at + timedelta(weeks=1)
                 elif interval == "monthly":
-                    next_dca = last_dca.created_at + timedelta(days=30)
+                    next_dca = last_created_at + timedelta(days=30)
                 else:
                     logger.warning("Unknown DCA interval", interval=interval)
                     return False
@@ -287,7 +299,8 @@ class DCAManager:
             try:
                 settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
                 if settings:
-                    settings.updated_at = datetime.now()
+                    # Use setattr to properly set SQLAlchemy attributes
+                    setattr(settings, 'updated_at', datetime.now())
                     db.commit()
             finally:
                 db.close()
@@ -403,10 +416,11 @@ class DCAManager:
                     settings = UserSettings(user_id=user_id)
                     db.add(settings)
                 
-                settings.dca_enabled = True
-                settings.dca_amount = amount
-                settings.dca_interval = interval
-                settings.updated_at = datetime.now()
+                # Use setattr for proper SQLAlchemy attribute assignment
+                setattr(settings, 'dca_enabled', True)
+                setattr(settings, 'dca_amount', amount)
+                setattr(settings, 'dca_interval', interval)
+                setattr(settings, 'updated_at', datetime.now())
                 
                 db.commit()
                 
@@ -428,8 +442,9 @@ class DCAManager:
                 settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
                 
                 if settings:
-                    settings.dca_enabled = False
-                    settings.updated_at = datetime.now()
+                    # Use setattr for proper SQLAlchemy attribute assignment
+                    setattr(settings, 'dca_enabled', False)
+                    setattr(settings, 'updated_at', datetime.now())
                     db.commit()
                     
                     logger.info("DCA disabled", user_id=user_id)
@@ -471,17 +486,20 @@ class DCAManager:
                 trade_count = len(dca_trades)
                 
                 # Calculate next DCA date
-                last_dca = max(dca_trades, key=lambda t: t.created_at) if dca_trades else None
+                last_dca = max(dca_trades, key=lambda t: getattr(t, 'created_at')) if dca_trades else None
                 next_dca = None
                 
                 if last_dca:
                     interval = dca_settings['dca_interval']
-                    if interval == "daily":
-                        next_dca = last_dca.created_at + timedelta(days=1)
-                    elif interval == "weekly":
-                        next_dca = last_dca.created_at + timedelta(weeks=1)
-                    elif interval == "monthly":
-                        next_dca = last_dca.created_at + timedelta(days=30)
+                    last_created_at = getattr(last_dca, 'created_at', None)
+                    
+                    if last_created_at:
+                        if interval == "daily":
+                            next_dca = last_created_at + timedelta(days=1)
+                        elif interval == "weekly":
+                            next_dca = last_created_at + timedelta(weeks=1)
+                        elif interval == "monthly":
+                            next_dca = last_created_at + timedelta(days=30)
                 
                 return {
                     "enabled": True,

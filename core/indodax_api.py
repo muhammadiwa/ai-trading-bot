@@ -6,6 +6,7 @@ import hmac
 import time
 import requests
 import json
+import aiohttp
 from typing import Dict, List, Optional, Any
 from config.settings import settings
 import structlog
@@ -171,11 +172,6 @@ class IndodaxAPI:
         
         try:
             # Use proper async request handling
-            try:
-                import aiohttp
-            except ImportError:
-                raise Exception("aiohttp is required for async requests. Install with: pip install aiohttp")
-                
             async with aiohttp.ClientSession() as session:
                 # Send as form data, not JSON
                 async with session.post(self.tapi_url, data=request_body, headers=headers) as response:
@@ -202,16 +198,12 @@ class IndodaxAPI:
                     logger.info("API request successful", method=method)
                     return result
             
-        except ImportError as e:
-            logger.error("Missing dependency", error=str(e))
-            raise
+        except aiohttp.ClientError as e:
+            logger.error("HTTP request failed", method=method, error=str(e))
+            raise Exception(f"Connection error: {str(e)}")
         except Exception as e:
-            if "aiohttp" in str(e) or "ClientError" in str(type(e).__name__):
-                logger.error("HTTP request failed", method=method, error=str(e))
-                raise Exception(f"Connection error: {str(e)}")
-            else:
-                logger.error("Private API request failed", method=method, error=str(e))
-                raise
+            logger.error("Private API request failed", method=method, error=str(e))
+            raise
     
     async def get_info(self) -> Dict[str, Any]:
         """Get account information"""
@@ -232,7 +224,7 @@ class IndodaxAPI:
             idr_amount: Amount in IDR (for buy orders)
             coin_amount: Amount in cryptocurrency (for sell orders or buy with coin amount)
         """
-        params: Dict[str, Any] = {
+        params = {
             "pair": pair,
             "type": type
         }

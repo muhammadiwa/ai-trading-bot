@@ -1,0 +1,13 @@
+# Extended Machine Learning Dependencies
+# Install dengan: pip install -r requirements-ml-extended.txt
+
+# Deep Learning
+torch==2.1.1
+torchvision==0.16.1
+tensorflow==2.15.0
+keras==2.15.0
+
+# Advanced ML Libraries
+catboost==1.2.3
+tsfresh==0.20.2  # Time series feature extraction
+sktime==0.24.0  # Time series machine learning
